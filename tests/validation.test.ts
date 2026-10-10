@@ -1,26 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { createJobSchema } from "../src/server/validation";
+import { catalogDownloadSchema, catalogRefreshSchema } from "../src/server/validation";
 
-describe("download validation", () => {
-  it("accepts F1 TV detail URLs and supplies safe defaults", () => {
-    const result = createJobSchema.parse({ url: "https://f1tv.formula1.com/detail/100000/example-session" });
-    expect(result).toMatchObject({ quality: "best", audio: "eng" });
+describe("catalog command validation", () => {
+  it("accepts server-owned event identifiers", () => {
+    expect(catalogDownloadSchema.parse({ eventId: "p12343" })).toEqual({ eventId: "p12343" });
+    expect(catalogDownloadSchema.parse({ eventId: "s616-m959" })).toEqual({ eventId: "s616-m959" });
   });
 
   it.each([
-    "https://example.com/detail/100000/example-session",
-    "http://f1tv.formula1.com/detail/100000/example-session",
-    "https://f1tv.formula1.com/page/home"
-  ])("rejects unsafe or unsupported URL %s", (url) => {
-    expect(createJobSchema.safeParse({ url }).success).toBe(false);
+    "https://f1tv.formula1.com/detail/100/session",
+    "p123;touch-bad",
+    "../event"
+  ])("rejects client-controlled or malformed identifier %s", (eventId) => {
+    expect(catalogDownloadSchema.safeParse({ eventId }).success).toBe(false);
   });
 
-  it("rejects values that could become arbitrary command arguments", () => {
-    const result = createJobSchema.safeParse({
-      url: "https://f1tv.formula1.com/detail/100000/example-session",
-      quality: "best; touch bad",
-      audio: "unknown"
-    });
-    expect(result.success).toBe(false);
+  it("allows only known refresh scopes and matching identifiers", () => {
+    expect(catalogRefreshSchema.safeParse({ scope: "seasons" }).success).toBe(true);
+    expect(catalogRefreshSchema.safeParse({ scope: "events", id: "100" }).success).toBe(true);
+    expect(catalogRefreshSchema.safeParse({ scope: "sessions", id: "p500" }).success).toBe(true);
+    expect(catalogRefreshSchema.safeParse({ scope: "events", id: "p500" }).success).toBe(false);
   });
 });

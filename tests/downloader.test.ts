@@ -8,6 +8,8 @@ const job: Job = {
   quality: "1920x1080",
   audio: "nld",
   channel: "INTERNATIONAL",
+  contentId: "100",
+  title: "Example session",
   status: "running",
   progress: 0,
   message: null,

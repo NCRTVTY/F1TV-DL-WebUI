@@ -1,20 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { AppConfig } from "./config";
+import { CatalogService, type CatalogFetch } from "./catalog";
 import { CredentialVault } from "./crypto";
 import { AppDatabase } from "./database";
 import { credentialsSettingKey, DownloadWorker } from "./downloader";
 import { fileMetadata, parseRange, resolveStoredFile } from "./files";
-import { createJobSchema, credentialsSchema } from "./validation";
+import { catalogDownloadSchema, catalogRefreshSchema, credentialsSchema } from "./validation";
 
 export interface BuildAppOptions {
   config: AppConfig;
   startWorker?: boolean;
+  catalogFetch?: CatalogFetch;
+  now?: () => Date;
 }
 
-export async function buildApp({ config, startWorker = true }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp({ config, startWorker = true, catalogFetch, now }: BuildAppOptions): Promise<FastifyInstance> {
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.mkdirSync(config.downloadDir, { recursive: true });
 
@@ -28,6 +31,7 @@ export async function buildApp({ config, startWorker = true }: BuildAppOptions):
   const db = new AppDatabase(path.join(config.dataDir, "f1tv-dl-webui.sqlite"));
   const vault = new CredentialVault(config.encryptionKey);
   const worker = new DownloadWorker(db, vault, config);
+  const catalog = new CatalogService(db, catalogFetch, now);
 
   if (startWorker) worker.start();
 
@@ -36,7 +40,7 @@ export async function buildApp({ config, startWorker = true }: BuildAppOptions):
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "no-referrer");
     reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-    reply.header("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; connect-src 'self'; script-src 'self'; style-src 'self'");
+    reply.header("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https://f1tv.formula1.com; connect-src 'self'; script-src 'self'; style-src 'self'");
     if (request.url.startsWith("/api/")) reply.header("Cache-Control", "no-store");
     return payload;
   });
@@ -88,14 +92,78 @@ export async function buildApp({ config, startWorker = true }: BuildAppOptions):
 
   app.get("/api/jobs", async () => ({ jobs: db.listJobs() }));
 
-  app.post("/api/jobs", async (request, reply) => {
-    const parsed = createJobSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0]?.message || "Invalid job" });
+  const catalogError = (reply: FastifyReply, error: unknown) => {
+    const message = error instanceof Error ? error.message : "F1TV catalog request failed";
+    return reply.status(502).send({ error: message.slice(0, 240) });
+  };
+
+  app.get("/api/catalog/seasons", async (_request, reply) => {
+    try {
+      return reply.send(await catalog.seasons());
+    } catch (error) {
+      return catalogError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { seasonId: string } }>("/api/catalog/seasons/:seasonId/events", async (request, reply) => {
+    if (!/^\d+$/.test(request.params.seasonId)) return reply.status(400).send({ error: "Invalid season identifier" });
+    try {
+      return reply.send(await catalog.events(request.params.seasonId));
+    } catch (error) {
+      return catalogError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { eventId: string } }>("/api/catalog/events/:eventId/sessions", async (request, reply) => {
+    if (!/^(?:p\d+|s\d+-m\d+)$/.test(request.params.eventId)) return reply.status(400).send({ error: "Invalid event identifier" });
+    try {
+      const result = await catalog.sessions(request.params.eventId);
+      return reply.send({ ...result, data: result.data.map(({ url: _url, ...session }) => session) });
+    } catch (error) {
+      return catalogError(reply, error);
+    }
+  });
+
+  app.post("/api/catalog/refresh", async (request, reply) => {
+    const parsed = catalogRefreshSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid catalog refresh request" });
+    try {
+      if (parsed.data.scope === "seasons") return reply.send(await catalog.seasons(true));
+      if (parsed.data.scope === "events") return reply.send(await catalog.events(parsed.data.id, true));
+      const result = await catalog.sessions(parsed.data.id, true);
+      return reply.send({ ...result, data: result.data.map(({ url: _url, ...session }) => session) });
+    } catch (error) {
+      return catalogError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { contentId: string } }>("/api/catalog/sessions/:contentId/download", async (request, reply) => {
+    if (!/^\d+$/.test(request.params.contentId)) return reply.status(400).send({ error: "Invalid session identifier" });
+    const parsed = catalogDownloadSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Invalid event identifier" });
     if (!db.getSetting(credentialsSettingKey)) {
       return reply.status(409).send({ error: "Configure F1 TV credentials before adding a download" });
     }
-    const job = db.createJob(parsed.data);
-    worker.wake();
+    let sessions;
+    try {
+      sessions = (await catalog.sessions(parsed.data.eventId)).data;
+    } catch (error) {
+      return catalogError(reply, error);
+    }
+    const session = sessions.find((candidate) => candidate.id === request.params.contentId);
+    if (!session) return reply.status(404).send({ error: "Session is not present in this F1TV event" });
+    if (!session.available) return reply.status(409).send({ error: "This session is not yet available as a replay" });
+    const existing = db.findActiveOrCompletedByContentId(session.id);
+    if (existing) return reply.status(409).send({ error: `This session is already ${existing.status}`, job: existing });
+    const job = db.createJob({
+      url: session.url,
+      quality: "best",
+      audio: "eng",
+      channel: "INTERNATIONAL",
+      contentId: session.id,
+      title: session.title
+    });
+    if (startWorker) worker.wake();
     return reply.status(201).send({ job });
   });
 

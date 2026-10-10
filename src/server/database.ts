@@ -2,7 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { CreateJobInput } from "./validation";
+
+export interface CreateJobInput {
+  url: string;
+  quality: string;
+  audio: string;
+  channel?: string;
+  contentId?: string;
+  title?: string;
+}
 
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
@@ -12,6 +20,8 @@ export interface Job {
   quality: string;
   audio: string;
   channel: string | null;
+  contentId: string | null;
+  title: string | null;
   status: JobStatus;
   progress: number;
   message: string | null;
@@ -27,6 +37,8 @@ interface JobRow {
   quality: string;
   audio: string;
   channel: string | null;
+  content_id: string | null;
+  title: string | null;
   status: JobStatus;
   progress: number;
   message: string | null;
@@ -42,6 +54,8 @@ const toJob = (row: JobRow): Job => ({
   quality: row.quality,
   audio: row.audio,
   channel: row.channel,
+  contentId: row.content_id,
+  title: row.title,
   status: row.status,
   progress: row.progress,
   message: row.message,
@@ -76,6 +90,8 @@ export class AppDatabase {
         quality TEXT NOT NULL,
         audio TEXT NOT NULL,
         channel TEXT,
+        content_id TEXT,
+        title TEXT,
         status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
         progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
         message TEXT,
@@ -87,6 +103,10 @@ export class AppDatabase {
 
       CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
     `);
+    const columns = new Set((this.db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>).map((column) => column.name));
+    if (!columns.has("content_id")) this.db.exec("ALTER TABLE jobs ADD COLUMN content_id TEXT");
+    if (!columns.has("title")) this.db.exec("ALTER TABLE jobs ADD COLUMN title TEXT");
+    this.db.exec("CREATE INDEX IF NOT EXISTS jobs_content_status_idx ON jobs(content_id, status)");
   }
 
   close(): void {
@@ -116,6 +136,8 @@ export class AppDatabase {
       quality: input.quality,
       audio: input.audio,
       channel: input.channel ?? null,
+      contentId: input.contentId ?? null,
+      title: input.title?.slice(0, 240) ?? null,
       status: "queued",
       progress: 0,
       message: "Waiting to download",
@@ -126,10 +148,19 @@ export class AppDatabase {
     };
 
     this.db.prepare(`
-      INSERT INTO jobs (id, url, quality, audio, channel, status, progress, message, output_file, created_at, started_at, finished_at)
-      VALUES (@id, @url, @quality, @audio, @channel, @status, @progress, @message, @outputFile, @createdAt, @startedAt, @finishedAt)
+      INSERT INTO jobs (id, url, quality, audio, channel, content_id, title, status, progress, message, output_file, created_at, started_at, finished_at)
+      VALUES (@id, @url, @quality, @audio, @channel, @contentId, @title, @status, @progress, @message, @outputFile, @createdAt, @startedAt, @finishedAt)
     `).run(job);
     return job;
+  }
+
+  findActiveOrCompletedByContentId(contentId: string): Job | null {
+    const row = this.db.prepare(`
+      SELECT * FROM jobs
+      WHERE content_id = ? AND status IN ('queued', 'running', 'completed')
+      ORDER BY created_at DESC LIMIT 1
+    `).get(contentId) as JobRow | undefined;
+    return row ? toJob(row) : null;
   }
 
   listJobs(): Job[] {

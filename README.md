@@ -1,24 +1,26 @@
 # F1TV-DL-WebUI
 
-Self-hosted, tablet-friendly web UI for `f1tv-dl` with encrypted F1 TV credential settings, direct session submission, a durable download queue, and MP4 playback or download.
+Self-hosted, tablet-friendly web UI for `f1tv-dl` with encrypted F1 TV credential settings, an account-ready Formula 1 catalog browser, a durable download queue, and MP4 playback or download.
 
 ## Implementation handoff
 
 See [DOCS/IMPLEMENTATION-SPEC.md](DOCS/IMPLEMENTATION-SPEC.md) for the complete requirements, architecture, upstream integration findings, security requirements, deployment instructions, and acceptance criteria.
 
-Current status: the initial direct-URL feature slice is implemented. Live F1 TV compatibility and production deployment have not yet been verified.
+Current status: the application is deployed on Harlem. Its server discovers the current season and archive directly from F1TV, while the download worker uses the configured account only when resolving an entitled replay.
 
 ## Current feature slice
 
 - Configure or remove F1 TV credentials without returning stored values to the browser.
 - Encrypt credentials at rest with AES-256-GCM using a deployment-provided key.
-- Submit an `https://f1tv.formula1.com/detail/...` session URL with quality, audio, and optional feed selection.
+- Browse every season exposed by F1TV, with the dynamically discovered current season selected by default.
+- Browse Formula 1 Grand Prix events and their practice, qualifying, sprint, sprint qualifying, and race replays.
+- Queue a replay with one click; the server derives the session URL and defaults to best quality, English audio, and the INTERNATIONAL feed.
 - Process one durable download at a time and recover an interrupted job after restart.
 - View progress, failures, completed downloads, and cancel queued or active work.
 - Stream or save completed MP4 files with HTTP range support.
 - Use a responsive phone and tablet interface.
 
-Full season, event, and session catalog browsing is the next product increment. The direct URL workflow remains the fallback when F1 TV changes its catalog APIs.
+The browser intentionally excludes F2/F3, highlights, shows, press conferences, documentaries, and F1 Kids. The UI never asks for a pasted session URL.
 
 ## Local development
 

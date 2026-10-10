@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/server/app";
 import { loadConfig } from "../src/server/config";
+import { fixtureFetch } from "./catalog-fixtures";
 
 const directories: string[] = [];
 
@@ -12,6 +13,8 @@ async function application() {
   directories.push(root);
   return buildApp({
     startWorker: false,
+    catalogFetch: fixtureFetch,
+    now: () => new Date("2026-10-10T12:00:00Z"),
     config: loadConfig({
       dataDir: path.join(root, "data"),
       downloadDir: path.join(root, "downloads"),
@@ -38,18 +41,29 @@ describe("HTTP API", () => {
     await app.close();
   });
 
-  it("requires credentials before a job can be queued", async () => {
+  it("browses the current F1 season without returning provider URLs", async () => {
     const app = await application();
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/jobs",
-      payload: { url: "https://f1tv.formula1.com/detail/100/example-session" }
-    });
+    const seasons = await app.inject({ method: "GET", url: "/api/catalog/seasons" });
+    expect(seasons.statusCode).toBe(200);
+    expect(seasons.json().data[0]).toMatchObject({ year: 2026, current: true });
+
+    const events = await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
+    expect(events.json().data[0]).toMatchObject({ id: "p500", country: "Australia" });
+
+    const sessions = await app.inject({ method: "GET", url: "/api/catalog/events/p500/sessions" });
+    expect(sessions.json().data).toHaveLength(1);
+    expect(sessions.body).not.toContain("f1tv.formula1.com/detail");
+    await app.close();
+  });
+
+  it("requires credentials before a catalog session can be queued", async () => {
+    const app = await application();
+    const response = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
     expect(response.statusCode).toBe(409);
     await app.close();
   });
 
-  it("stores credentials opaquely, queues, lists, and cancels a job", async () => {
+  it("stores credentials opaquely and queues INTERNATIONAL feed once", async () => {
     const app = await application();
     const saved = await app.inject({
       method: "PUT",
@@ -63,13 +77,19 @@ describe("HTTP API", () => {
     expect(settings.body).not.toContain("fixture-user");
     expect(settings.body).not.toContain("fixture-value");
 
+    await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
+
     const created = await app.inject({
       method: "POST",
-      url: "/api/jobs",
-      payload: { url: "https://f1tv.formula1.com/detail/100/example-session", quality: "best", audio: "eng" }
+      url: "/api/catalog/sessions/700/download",
+      payload: { eventId: "p500" }
     });
     expect(created.statusCode).toBe(201);
+    expect(created.json().job).toMatchObject({ contentId: "700", quality: "best", audio: "eng", channel: "INTERNATIONAL" });
     const id = created.json().job.id as string;
+
+    const duplicate = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
+    expect(duplicate.statusCode).toBe(409);
 
     const listed = await app.inject({ method: "GET", url: "/api/jobs" });
     expect(listed.json().jobs).toHaveLength(1);
@@ -80,15 +100,10 @@ describe("HTTP API", () => {
     await app.close();
   });
 
-  it("rejects a non-F1 URL", async () => {
+  it("does not expose the legacy URL submission route", async () => {
     const app = await application();
-    await app.inject({
-      method: "PUT",
-      url: "/api/settings/credentials",
-      payload: { username: "fixture-user", password: "fixture-value" }
-    });
     const response = await app.inject({ method: "POST", url: "/api/jobs", payload: { url: "https://example.com/detail/100" } });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(404);
     await app.close();
   });
 });

@@ -9,6 +9,8 @@ interface Job {
   quality: string;
   audio: string;
   channel: string | null;
+  contentId: string | null;
+  title: string | null;
   status: JobStatus;
   progress: number;
   message: string | null;
@@ -17,6 +19,17 @@ interface Job {
   startedAt: string | null;
   finishedAt: string | null;
 }
+
+interface CatalogSeason { id: string; year: number; title: string; current: boolean }
+interface CatalogEvent {
+  id: string; seasonId: string; season: number; round: number | null; title: string; country: string | null;
+  startDate: string | null; endDate: string | null; complete: boolean; thumbnailUrl: string | null;
+}
+interface CatalogSession {
+  id: string; eventId: string; title: string; type: string; startDate: string | null; endDate: string | null;
+  durationSeconds: number | null; durationLabel: string | null; thumbnailUrl: string | null; available: boolean;
+}
+interface CatalogResult<T> { data: T; refreshedAt: string; stale: boolean; warning?: string }
 
 interface Settings {
   credentialsConfigured: boolean;
@@ -53,6 +66,15 @@ function sessionName(url: string): string {
   }
 }
 
+function jobName(job: Job): string {
+  return job.title || sessionName(job.url);
+}
+
+function displayDate(value: string | null): string {
+  if (!value) return "Date unavailable";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
 function relativeTime(value: string): string {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   if (seconds < 60) return "just now";
@@ -65,42 +87,112 @@ function Notice({ tone = "neutral", children }: { tone?: "neutral" | "error" | "
   return <div className={`notice notice--${tone}`} role={tone === "error" ? "alert" : "status"}>{children}</div>;
 }
 
-function SessionPanel({ configured, onQueued, onOpenSettings }: {
+function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
   configured: boolean;
+  jobs: Job[];
   onQueued: (job: Job) => void;
   onOpenSettings: () => void;
 }) {
-  const [url, setUrl] = useState("");
-  const [quality, setQuality] = useState("best");
-  const [audio, setAudio] = useState("eng");
-  const [channel, setChannel] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [seasons, setSeasons] = useState<CatalogSeason[]>([]);
+  const [events, setEvents] = useState<CatalogEvent[]>([]);
+  const [sessions, setSessions] = useState<CatalogSession[]>([]);
+  const [seasonId, setSeasonId] = useState("");
+  const [eventId, setEventId] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [queueing, setQueueing] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
+  const loadSeasons = useCallback(async () => {
+    const result = await api<CatalogResult<CatalogSeason[]>>("/api/catalog/seasons");
+    setSeasons(result.data);
+    setWarning(result.warning || "");
+    setRefreshedAt(result.refreshedAt);
+    setSeasonId((current) => current || result.data.find((season) => season.current)?.id || result.data[0]?.id || "");
+  }, []);
+
+  const loadEvents = useCallback(async (nextSeasonId: string) => {
+    const result = await api<CatalogResult<CatalogEvent[]>>(`/api/catalog/seasons/${nextSeasonId}/events`);
+    setEvents(result.data);
+    setWarning(result.warning || "");
+    setRefreshedAt(result.refreshedAt);
+    setEventId((current) => {
+      if (result.data.some((event) => event.id === current)) return current;
+      const completed = result.data.filter((event) => event.complete);
+      return completed.at(-1)?.id || result.data[0]?.id || "";
+    });
+  }, []);
+
+  const loadSessions = useCallback(async (nextEventId: string) => {
+    const result = await api<CatalogResult<CatalogSession[]>>(`/api/catalog/events/${nextEventId}/sessions`);
+    setSessions(result.data);
+    setWarning(result.warning || "");
+    setRefreshedAt(result.refreshedAt);
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    void loadSeasons().catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load F1TV seasons")).finally(() => setLoading(false));
+  }, [loadSeasons]);
+
+  useEffect(() => {
+    if (!seasonId) return;
+    setLoading(true); setError(""); setEventId(""); setSessions([]);
+    void loadEvents(seasonId).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load F1 events")).finally(() => setLoading(false));
+  }, [loadEvents, seasonId]);
+
+  useEffect(() => {
+    if (!eventId) return;
+    setLoading(true); setError(""); setSessions([]);
+    void loadSessions(eventId).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load F1 sessions")).finally(() => setLoading(false));
+  }, [eventId, loadSessions]);
+
+  async function refresh() {
+    setRefreshing(true); setError("");
     try {
-      const { job } = await api<{ job: Job }>("/api/jobs", {
+      const seasonResult = await api<CatalogResult<CatalogSeason[]>>("/api/catalog/refresh", { method: "POST", body: JSON.stringify({ scope: "seasons" }) });
+      setSeasons(seasonResult.data);
+      if (seasonId) {
+        const eventResult = await api<CatalogResult<CatalogEvent[]>>("/api/catalog/refresh", { method: "POST", body: JSON.stringify({ scope: "events", id: seasonId }) });
+        setEvents(eventResult.data);
+      }
+      if (eventId) {
+        const sessionResult = await api<CatalogResult<CatalogSession[]>>("/api/catalog/refresh", { method: "POST", body: JSON.stringify({ scope: "sessions", id: eventId }) });
+        setSessions(sessionResult.data);
+        setWarning(sessionResult.warning || "");
+        setRefreshedAt(sessionResult.refreshedAt);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not refresh the F1TV catalog");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function queue(session: CatalogSession) {
+    setQueueing(session.id); setError("");
+    try {
+      const { job } = await api<{ job: Job }>(`/api/catalog/sessions/${session.id}/download`, {
         method: "POST",
-        body: JSON.stringify({ url, quality, audio, ...(channel.trim() ? { channel: channel.trim() } : {}) })
+        body: JSON.stringify({ eventId: session.eventId })
       });
-      setUrl("");
-      setChannel("");
       onQueued(job);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not queue the session");
     } finally {
-      setBusy(false);
+      setQueueing(null);
     }
   }
 
   return (
     <section className="panel session-panel">
-      <div className="eyebrow">Direct session</div>
-      <h2>Send a race to your tablet.</h2>
-      <p className="lede">Paste an F1 TV replay URL. The server handles the download and keeps the finished MP4 ready for this device.</p>
+      <div className="catalog-toolbar">
+        <div><div className="eyebrow">F1TV catalog</div><h2>Choose a race weekend.</h2></div>
+        <button className="quiet-button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      <p className="lede">Browse official Formula 1 replays and create an MP4 with one click. Downloads use best quality, English audio, and the INTERNATIONAL feed.</p>
 
       {!configured && (
         <Notice tone="neutral">
@@ -109,58 +201,33 @@ function SessionPanel({ configured, onQueued, onOpenSettings }: {
         </Notice>
       )}
       {error && <Notice tone="error">{error}</Notice>}
+      {warning && <Notice tone="neutral">Showing cached catalog data · {warning}</Notice>}
 
-      <form className="session-form" onSubmit={submit}>
-        <label className="field field--wide">
-          <span>Session URL</span>
-          <input
-            type="url"
-            inputMode="url"
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            placeholder="https://f1tv.formula1.com/detail/..."
-            required
-          />
-        </label>
-        <div className="field-row">
-          <label className="field">
-            <span>Quality</span>
-            <select value={quality} onChange={(event) => setQuality(event.target.value)}>
-              <option value="best">Best available</option>
-              <option value="1920x1080">1080p</option>
-              <option value="1280x720">720p</option>
-              <option value="854x480">480p</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Audio</span>
-            <select value={audio} onChange={(event) => setAudio(event.target.value)}>
-              <option value="eng">English</option>
-              <option value="nld">Dutch</option>
-              <option value="deu">German</option>
-              <option value="fra">French</option>
-              <option value="por">Portuguese</option>
-              <option value="spa">Spanish</option>
-            </select>
-          </label>
-        </div>
-        <label className="field field--wide">
-          <span>Feed <small>optional</small></span>
-          <input value={channel} onChange={(event) => setChannel(event.target.value)} placeholder="F1 LIVE, INTERNATIONAL, driver name…" />
-        </label>
-        <button className="primary-button" disabled={!configured || busy}>
-          <span>{busy ? "Adding…" : "Add to queue"}</span>
-          <span aria-hidden="true">→</span>
-        </button>
-      </form>
-
-      <div className="catalog-note">
-        <span className="catalog-note__number">NEXT</span>
-        <div>
-          <strong>Full session browser</strong>
-          <p>Season, event, and session discovery will land through the same download adapter. Direct URLs remain the reliable fallback.</p>
-        </div>
+      <div className="catalog-controls">
+        <label className="field"><span>Season</span><select value={seasonId} onChange={(event) => setSeasonId(event.target.value)}>{seasons.map((season) => <option key={season.id} value={season.id}>{season.title}{season.current ? " · Current" : ""}</option>)}</select></label>
+        <span className="cache-time">{refreshedAt ? `Updated ${relativeTime(refreshedAt)}` : "Loading catalog"}</span>
       </div>
+
+      {loading && events.length === 0 ? <div className="empty-state"><span>F1</span><p>Loading the F1TV catalog…</p></div> : (
+        <>
+          <div className="event-strip" aria-label="Grand Prix events">
+            {events.map((event) => <button key={event.id} className={event.id === eventId ? "active" : ""} onClick={() => setEventId(event.id)}><small>{event.round ? `Round ${event.round}` : event.season}</small><strong>{event.country || event.title.replace(/Formula 1|Grand Prix/gi, "").replace(/\b(?:19|20)\d{2}\b/g, "").trim()}</strong><span>{event.complete ? "Replay available" : displayDate(event.startDate)}</span></button>)}
+          </div>
+
+          <div className="section-heading catalog-session-heading"><div><div className="eyebrow">Available sessions</div><h3>{events.find((event) => event.id === eventId)?.title || "Select an event"}</h3></div><span className="count-chip">{sessions.length} sessions</span></div>
+          {sessions.length === 0 ? <div className="empty-state"><span>00</span><p>{loading ? "Loading sessions…" : "No supported Formula 1 sessions found."}</p></div> : (
+            <div className="session-grid">
+              {sessions.map((session) => {
+                const existing = jobs.find((job) => job.contentId === session.id && ["queued", "running", "completed"].includes(job.status));
+                return <article className="session-card" key={session.id}>
+                  {session.thumbnailUrl ? <img src={session.thumbnailUrl} alt="" loading="lazy" /> : <div className="session-card__placeholder">F1</div>}
+                  <div className="session-card__body"><span className="status">{session.type}</span><h3>{session.title}</h3><p>{displayDate(session.startDate)}{session.durationLabel ? ` · ${session.durationLabel}` : ""}</p><div className="session-card__footer"><small>BEST · ENG · INTERNATIONAL</small><button className="primary-button primary-button--small" disabled={!configured || !session.available || Boolean(existing) || queueing === session.id} onClick={() => void queue(session)}>{existing ? existing.status : queueing === session.id ? "Adding…" : session.available ? "Download MP4" : "Not available"}</button></div></div>
+                </article>;
+              })}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -186,7 +253,7 @@ function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) =>
               <div className="job-card__top">
                 <div>
                   <span className={`status status--${job.status}`}>{job.status}</span>
-                  <h3>{sessionName(job.url)}</h3>
+                  <h3>{jobName(job)}</h3>
                 </div>
                 <span className="job-time">{relativeTime(job.createdAt)}</span>
               </div>
@@ -228,7 +295,7 @@ function DownloadsPanel({ jobs }: { jobs: Job[] }) {
             <article className="download-card" key={job.id}>
               <div className="download-card__flag" aria-hidden="true" />
               <div className="status status--completed">ready</div>
-              <h3>{sessionName(job.url)}</h3>
+              <h3>{jobName(job)}</h3>
               <p>{job.quality === "best" ? "Best available quality" : job.quality} · {job.audio.toUpperCase()}</p>
               <div className="download-actions">
                 <a className="primary-button primary-button--small" href={`/api/downloads/${job.id}/file`}>Play</a>
@@ -357,7 +424,7 @@ export function App() {
             <p>F1TV / PRIVATE ARCHIVE</p>
             <h1>{tab === "sessions" ? "Pick the session.\nKeep the race." : navigation.find((item) => item.id === tab)?.label}</h1>
           </div>
-          {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} onQueued={(job) => { setJobs((current) => [job, ...current]); setTab("queue"); }} onOpenSettings={() => setTab("settings")} />}
+          {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} jobs={jobs} onQueued={(job) => setJobs((current) => [job, ...current])} onOpenSettings={() => setTab("settings")} />}
           {tab === "queue" && <QueuePanel jobs={jobs} onCancel={cancel} />}
           {tab === "downloads" && <DownloadsPanel jobs={jobs} />}
           {tab === "settings" && <SettingsPanel settings={settings} onChanged={refreshSettings} />}
