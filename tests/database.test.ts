@@ -17,6 +17,44 @@ afterEach(() => {
 });
 
 describe("durable queue", () => {
+  it("defaults to F1 LIVE and migrates existing queued jobs on startup", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-db-"));
+    directories.push(directory);
+    const filename = path.join(directory, "test.sqlite");
+    let db = new AppDatabase(filename);
+    expect(db.getDefaultFeed()).toBe("F1 LIVE");
+
+    const running = db.createJob({ url: "https://f1tv.formula1.com/detail/1/running", quality: "best", audio: "eng", channel: "INTERNATIONAL" });
+    db.claimNext();
+    const queued = db.createJob({ url: "https://f1tv.formula1.com/detail/2/queued", quality: "best", audio: "eng", channel: "INTERNATIONAL" });
+    db.close();
+
+    db = new AppDatabase(filename);
+    expect(db.getJob(queued.id)?.channel).toBe("F1 LIVE");
+    expect(db.getJob(running.id)?.channel).toBe("INTERNATIONAL");
+    db.close();
+  });
+
+  it("changes the default feed and updates only queued jobs", () => {
+    const db = database();
+    const completed = db.createJob({ url: "https://f1tv.formula1.com/detail/1/completed", quality: "best", audio: "eng", channel: "F1 LIVE" });
+    db.claimNext();
+    db.completeJob(completed.id, `${completed.id}/completed.mp4`);
+    const running = db.createJob({ url: "https://f1tv.formula1.com/detail/2/running", quality: "best", audio: "eng", channel: "F1 LIVE" });
+    db.claimNext();
+    const queued = db.createJob({ url: "https://f1tv.formula1.com/detail/3/queued", quality: "best", audio: "eng", channel: "F1 LIVE" });
+    const cancelled = db.createJob({ url: "https://f1tv.formula1.com/detail/4/cancelled", quality: "best", audio: "eng", channel: "F1 LIVE" });
+    db.cancelJob(cancelled.id);
+
+    expect(db.setDefaultFeed("INTERNATIONAL")).toBe(1);
+    expect(db.getDefaultFeed()).toBe("INTERNATIONAL");
+    expect(db.getJob(queued.id)?.channel).toBe("INTERNATIONAL");
+    expect(db.getJob(completed.id)?.channel).toBe("F1 LIVE");
+    expect(db.getJob(running.id)?.channel).toBe("F1 LIVE");
+    expect(db.getJob(cancelled.id)?.channel).toBe("F1 LIVE");
+    db.close();
+  });
+
   it("claims jobs in creation order and records completion", () => {
     const db = database();
     const first = db.createJob({ url: "https://f1tv.formula1.com/detail/1/first", quality: "best", audio: "eng" });

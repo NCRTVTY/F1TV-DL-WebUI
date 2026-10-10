@@ -3,6 +3,16 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 
+export const downloadFeeds = ["F1 LIVE", "INTERNATIONAL"] as const;
+export type DownloadFeed = typeof downloadFeeds[number];
+export const initialDefaultFeed: DownloadFeed = "F1 LIVE";
+
+const DEFAULT_FEED_SETTING_KEY = "default_download_feed";
+
+function isDownloadFeed(value: string | null): value is DownloadFeed {
+  return downloadFeeds.some((feed) => feed === value);
+}
+
 export interface CreateJobInput {
   url: string;
   quality: string;
@@ -108,6 +118,22 @@ export class AppDatabase {
     if (!columns.has("content_id")) this.db.exec("ALTER TABLE jobs ADD COLUMN content_id TEXT");
     if (!columns.has("title")) this.db.exec("ALTER TABLE jobs ADD COLUMN title TEXT");
     this.db.exec("CREATE INDEX IF NOT EXISTS jobs_content_status_idx ON jobs(content_id, status)");
+
+    const alignQueuedJobs = this.db.transaction(() => {
+      const stored = this.getSetting(DEFAULT_FEED_SETTING_KEY);
+      const defaultFeed = isDownloadFeed(stored) ? stored : initialDefaultFeed;
+      if (stored !== defaultFeed) {
+        this.db.prepare(`
+          INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        `).run(DEFAULT_FEED_SETTING_KEY, defaultFeed, new Date().toISOString());
+      }
+      this.db.prepare(`
+        UPDATE jobs SET channel = ?
+        WHERE status = 'queued' AND (channel IS NULL OR channel <> ?)
+      `).run(defaultFeed, defaultFeed);
+    });
+    alignQueuedJobs();
   }
 
   close(): void {
@@ -138,6 +164,30 @@ export class AppDatabase {
 
   deleteSetting(key: string): void {
     this.db.prepare("DELETE FROM settings WHERE key = ?").run(key);
+  }
+
+  getDefaultFeed(): DownloadFeed {
+    const stored = this.getSetting(DEFAULT_FEED_SETTING_KEY);
+    return isDownloadFeed(stored) ? stored : initialDefaultFeed;
+  }
+
+  setDefaultFeed(defaultFeed: DownloadFeed): number {
+    const update = this.db.transaction(() => {
+      const jobs = this.db.prepare(`
+        SELECT id FROM jobs
+        WHERE status = 'queued' AND (channel IS NULL OR channel <> ?)
+      `).all(defaultFeed) as Array<{ id: string }>;
+      this.db.prepare(`
+        INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `).run(DEFAULT_FEED_SETTING_KEY, defaultFeed, new Date().toISOString());
+      this.db.prepare(`
+        UPDATE jobs SET channel = ?
+        WHERE status = 'queued' AND (channel IS NULL OR channel <> ?)
+      `).run(defaultFeed, defaultFeed);
+      return jobs;
+    });
+    return update().length;
   }
 
   createJob(input: CreateJobInput): Job {

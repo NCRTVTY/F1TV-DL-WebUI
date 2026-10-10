@@ -23,6 +23,13 @@ if [ "$quality" = "silent" ]; then
   sleep 30
 fi
 
+if [ "$quality" = "cancel" ]; then
+  mkdir -p "$output_directory"
+  printf 'partial fixture media' > "$output_directory/partial.mp4"
+  echo "Percent Complete=12%"
+  sleep 30
+fi
+
 if [ "$quality" = "chatty" ]; then
   count=0
   while [ "$count" -lt 5 ]; do

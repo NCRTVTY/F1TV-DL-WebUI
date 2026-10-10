@@ -1,8 +1,13 @@
 import { z } from "zod";
+import { downloadFeeds } from "./database";
 
 export const credentialsSchema = z.object({
   username: z.string().trim().min(1).max(320),
   password: z.string().min(1).max(1024)
+});
+
+export const defaultFeedSchema = z.object({
+  defaultFeed: z.enum(downloadFeeds)
 });
 
 export const catalogDownloadSchema = z.object({

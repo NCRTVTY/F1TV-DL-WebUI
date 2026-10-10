@@ -2,6 +2,7 @@ import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } fr
 
 type Tab = "sessions" | "queue" | "downloads" | "settings";
 type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+type DownloadFeed = "F1 LIVE" | "INTERNATIONAL";
 
 interface Job {
   id: string;
@@ -36,6 +37,7 @@ interface Settings {
   credentialsConfigured: boolean;
   encryptionReady: boolean;
   port: number;
+  defaultFeed: DownloadFeed;
 }
 
 const navigation: Array<{ id: Tab; label: string; marker: string }> = [
@@ -106,8 +108,9 @@ function Notice({ tone = "neutral", children }: { tone?: "neutral" | "error" | "
   return <div className={`notice notice--${tone}`} role={tone === "error" ? "alert" : "status"}>{children}</div>;
 }
 
-function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
+function SessionPanel({ configured, defaultFeed, jobs, onQueued, onOpenSettings }: {
   configured: boolean;
+  defaultFeed: DownloadFeed;
   jobs: Job[];
   onQueued: (job: Job) => void;
   onOpenSettings: () => void;
@@ -212,7 +215,7 @@ function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
         <div><div className="eyebrow">F1TV catalog</div><h2>Choose a race weekend.</h2></div>
         <button className="quiet-button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Refreshing…" : "Refresh"}</button>
       </div>
-      <p className="lede">Browse official Formula 1 replays and create an MP4 with one click. Downloads use best quality, English audio, and the INTERNATIONAL feed.</p>
+      <p className="lede">Browse official Formula 1 replays and create an MP4 with one click. Downloads use best quality, English audio, and the {defaultFeed} feed.</p>
 
       {!configured && (
         <Notice tone="neutral">
@@ -249,7 +252,7 @@ function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
                 const existing = jobs.find((job) => job.contentId === session.id && ["queued", "running", "completed"].includes(job.status));
                 return <article className="session-card" key={session.id}>
                   {session.thumbnailUrl ? <img src={session.thumbnailUrl} alt="" loading="lazy" /> : <div className="session-card__placeholder">F1</div>}
-                  <div className="session-card__body"><span className="status">{session.type}</span><h3>{session.title}</h3><p>{displayDate(session.startDate)}{session.durationLabel ? ` · ${session.durationLabel}` : ""}</p><div className="session-card__footer"><small>BEST · ENG · INTERNATIONAL</small><button className="primary-button primary-button--small" disabled={!configured || !session.available || Boolean(existing) || queueing === session.id} onClick={() => void queue(session)}>{existing ? existing.status : queueing === session.id ? "Adding…" : session.available ? "Download MP4" : "Not available"}</button></div></div>
+                  <div className="session-card__body"><span className="status">{session.type}</span><h3>{session.title}</h3><p>{displayDate(session.startDate)}{session.durationLabel ? ` · ${session.durationLabel}` : ""}</p><div className="session-card__footer"><small>BEST · ENG · {defaultFeed}</small><button className="primary-button primary-button--small" disabled={!configured || !session.available || Boolean(existing) || queueing === session.id} onClick={() => void queue(session)}>{existing ? existing.status : queueing === session.id ? "Adding…" : session.available ? "Download MP4" : "Not available"}</button></div></div>
                 </article>;
               })}
             </div>
@@ -260,7 +263,7 @@ function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
   );
 }
 
-const QueueJobCard = memo(function QueueJobCard({ job, onCancel }: { job: Job; onCancel: (id: string) => Promise<void> }) {
+const QueueJobCard = memo(function QueueJobCard({ job, onCancel }: { job: Job; onCancel: (job: Job) => void }) {
   return (
     <article className="job-card">
       <div className="job-card__top">
@@ -281,15 +284,78 @@ const QueueJobCard = memo(function QueueJobCard({ job, onCancel }: { job: Job; o
       <div className="job-card__footer">
         <p>{job.message}</p>
         {(job.status === "queued" || job.status === "running") && (
-          <button className="quiet-button" onClick={() => void onCancel(job.id)}>Cancel</button>
+          <button className="quiet-button" onClick={() => onCancel(job)}>Cancel</button>
         )}
       </div>
     </article>
   );
 });
 
+function CancelDialog({ job, busy, error, onClose, onConfirm }: {
+  job: Job;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const dismissButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    dismissButton.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onClose]);
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title" aria-describedby="cancel-dialog-description">
+        <div className="eyebrow">Cancel download</div>
+        <h2 id="cancel-dialog-title">Stop {jobName(job)}?</h2>
+        <p id="cancel-dialog-description">The download will stop and any partially downloaded file will be removed. You can download this session again later.</p>
+        {error && <Notice tone="error">{error}</Notice>}
+        <div className="confirm-dialog__actions">
+          <button ref={dismissButton} className="quiet-button" disabled={busy} onClick={onClose}>Keep downloading</button>
+          <button className="primary-button primary-button--danger" disabled={busy} onClick={onConfirm}>{busy ? "Cancelling…" : "Cancel download"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) => Promise<void> }) {
-  const activeJobs = jobs.filter((job) => job.status !== "completed");
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const activeJobs = jobs.filter((job) => job.status !== "completed" && job.status !== "cancelled");
+
+  const closeDialog = useCallback(() => {
+    if (cancelling) return;
+    setSelectedJob(null);
+    setCancelError("");
+  }, [cancelling]);
+
+  async function confirmCancellation() {
+    if (!selectedJob) return;
+    setCancelling(true);
+    setCancelError("");
+    try {
+      await onCancel(selectedJob.id);
+      setSelectedJob(null);
+    } catch (caught) {
+      setCancelError(caught instanceof Error ? caught.message : "Could not cancel the download");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  function openDialog(job: Job) {
+    setCancelError("");
+    setSelectedJob(job);
+  }
+
   return (
     <section className="panel">
       <div className="section-heading">
@@ -305,10 +371,11 @@ function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) =>
       ) : (
         <div className="job-list">
           {activeJobs.map((job) => (
-            <QueueJobCard job={job} key={job.id} onCancel={onCancel} />
+            <QueueJobCard job={job} key={job.id} onCancel={openDialog} />
           ))}
         </div>
       )}
+      {selectedJob && <CancelDialog job={selectedJob} busy={cancelling} error={cancelError} onClose={closeDialog} onConfirm={() => void confirmCancellation()} />}
     </section>
   );
 }
@@ -349,6 +416,22 @@ function SettingsPanel({ settings, onChanged }: { settings: Settings; onChanged:
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [feedBusy, setFeedBusy] = useState(false);
+
+  async function changeDefaultFeed(defaultFeed: DownloadFeed) {
+    setFeedBusy(true); setError(""); setMessage("");
+    try {
+      const result = await api<{ defaultFeed: DownloadFeed; updatedJobs: number }>("/api/settings/default-feed", {
+        method: "PUT",
+        body: JSON.stringify({ defaultFeed })
+      });
+      const queued = result.updatedJobs === 1 ? "1 queued job" : `${result.updatedJobs} queued jobs`;
+      setMessage(`Default feed changed to ${result.defaultFeed}. Updated ${queued}.`);
+      await onChanged();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not change the default feed");
+    } finally { setFeedBusy(false); }
+  }
 
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -379,6 +462,16 @@ function SettingsPanel({ settings, onChanged }: { settings: Settings; onChanged:
       <div className="eyebrow">Private configuration</div>
       <h2>F1 TV account.</h2>
       <p className="lede">Values are encrypted before they reach disk and are never returned to the browser. Saving replaces the previous account.</p>
+      <div className="default-feed-setting">
+        <label className="field field--wide">
+          <span>Default download feed</span>
+          <select disabled={feedBusy} value={settings.defaultFeed} onChange={(event) => void changeDefaultFeed(event.target.value as DownloadFeed)}>
+            <option value="F1 LIVE">F1 LIVE</option>
+            <option value="INTERNATIONAL">INTERNATIONAL</option>
+          </select>
+          <small>Changing this also updates every download that is still queued.</small>
+        </label>
+      </div>
       <div className="credential-state">
         <span className={`state-dot ${settings.credentialsConfigured ? "state-dot--ok" : ""}`} />
         <div><strong>{settings.credentialsConfigured ? "Credentials configured" : "No credentials stored"}</strong><small>Encryption {settings.encryptionReady ? "ready" : "not configured"}</small></div>
@@ -400,7 +493,7 @@ function SettingsPanel({ settings, onChanged }: { settings: Settings; onChanged:
 export function App() {
   const [tab, setTab] = useState<Tab>("sessions");
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [settings, setSettings] = useState<Settings>({ credentialsConfigured: false, encryptionReady: false, port: 43729 });
+  const [settings, setSettings] = useState<Settings>({ credentialsConfigured: false, encryptionReady: false, port: 43729, defaultFeed: "F1 LIVE" });
   const [online, setOnline] = useState(true);
   const jobRequestVersions = useRef(new Map<string, number>());
 
@@ -451,8 +544,8 @@ export function App() {
   const activeCount = useMemo(() => jobs.filter((job) => job.status === "queued" || job.status === "running").length, [jobs]);
 
   const cancel = useCallback(async (id: string) => {
-    const { job } = await api<{ job: Job }>(`/api/jobs/${id}/cancel`, { method: "POST" });
-    setJobs((current) => mergeJob(current, job));
+    await api<{ job: Job }>(`/api/jobs/${id}/cancel`, { method: "POST" });
+    setJobs((current) => current.filter((job) => job.id !== id));
   }, []);
 
   return (
@@ -483,10 +576,10 @@ export function App() {
             <p>F1TV / PRIVATE ARCHIVE</p>
             <h1>{tab === "sessions" ? "Pick the session.\nKeep the race." : navigation.find((item) => item.id === tab)?.label}</h1>
           </div>
-          {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} jobs={jobs} onQueued={(job) => setJobs((current) => [job, ...current])} onOpenSettings={() => setTab("settings")} />}
+          {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} defaultFeed={settings.defaultFeed} jobs={jobs} onQueued={(job) => setJobs((current) => [job, ...current])} onOpenSettings={() => setTab("settings")} />}
           {tab === "queue" && <QueuePanel jobs={jobs} onCancel={cancel} />}
           {tab === "downloads" && <DownloadsPanel jobs={jobs} />}
-          {tab === "settings" && <SettingsPanel settings={settings} onChanged={refreshSettings} />}
+          {tab === "settings" && <SettingsPanel settings={settings} onChanged={async () => { await Promise.all([refreshSettings(), refreshJobs()]); }} />}
         </main>
       </div>
 

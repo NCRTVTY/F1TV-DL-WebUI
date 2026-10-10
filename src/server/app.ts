@@ -9,7 +9,7 @@ import { CredentialVault } from "./crypto";
 import { AppDatabase } from "./database";
 import { credentialsSettingKey, DownloadWorker } from "./downloader";
 import { fileMetadata, parseRange, resolveStoredFile } from "./files";
-import { catalogDownloadSchema, catalogRefreshSchema, credentialsSchema } from "./validation";
+import { catalogDownloadSchema, catalogRefreshSchema, credentialsSchema, defaultFeedSchema } from "./validation";
 
 export interface BuildAppOptions {
   config: AppConfig;
@@ -83,8 +83,16 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   app.get("/api/settings", async () => ({
     credentialsConfigured: Boolean(db.getSetting(credentialsSettingKey)),
     encryptionReady: vault.ready,
-    port: config.port
+    port: config.port,
+    defaultFeed: db.getDefaultFeed()
   }));
+
+  app.put("/api/settings/default-feed", async (request, reply) => {
+    const parsed = defaultFeedSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: "Choose a supported default feed" });
+    const updatedJobs = db.setDefaultFeed(parsed.data.defaultFeed);
+    return reply.send({ defaultFeed: parsed.data.defaultFeed, updatedJobs });
+  });
 
   app.put("/api/settings/credentials", async (request, reply) => {
     if (!vault.ready) return reply.status(503).send({ error: "Credential encryption is not configured" });
@@ -205,7 +213,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
       url: session.url,
       quality: "best",
       audio: "eng",
-      channel: "INTERNATIONAL",
+      channel: db.getDefaultFeed(),
       contentId: session.id,
       title: session.title
     });

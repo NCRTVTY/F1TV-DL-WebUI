@@ -96,7 +96,7 @@ describe("HTTP API", () => {
     await app.close();
   });
 
-  it("stores credentials opaquely and queues INTERNATIONAL feed once", async () => {
+  it("stores credentials opaquely and queues the F1 LIVE feed by default", async () => {
     const app = await application();
     const saved = await app.inject({
       method: "PUT",
@@ -106,7 +106,7 @@ describe("HTTP API", () => {
     expect(saved.statusCode).toBe(200);
 
     const settings = await app.inject({ method: "GET", url: "/api/settings" });
-    expect(settings.json()).toEqual({ credentialsConfigured: true, encryptionReady: true, port: 43729 });
+    expect(settings.json()).toEqual({ credentialsConfigured: true, encryptionReady: true, port: 43729, defaultFeed: "F1 LIVE" });
     expect(settings.body).not.toContain("fixture-user");
     expect(settings.body).not.toContain("fixture-value");
 
@@ -118,7 +118,7 @@ describe("HTTP API", () => {
       payload: { eventId: "p500" }
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json().job).toMatchObject({ contentId: "700", quality: "best", audio: "eng", channel: "INTERNATIONAL" });
+    expect(created.json().job).toMatchObject({ contentId: "700", quality: "best", audio: "eng", channel: "F1 LIVE" });
     const id = created.json().job.id as string;
 
     const duplicate = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
@@ -130,6 +130,58 @@ describe("HTTP API", () => {
     const cancelled = await app.inject({ method: "POST", url: `/api/jobs/${id}/cancel` });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().job.status).toBe("cancelled");
+
+    const cancelledAgain = await app.inject({ method: "POST", url: `/api/jobs/${id}/cancel` });
+    expect(cancelledAgain.statusCode).toBe(200);
+    expect(cancelledAgain.json().job.status).toBe("cancelled");
+
+    const requeued = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
+    expect(requeued.statusCode).toBe(201);
+    expect(requeued.json().job).toMatchObject({ contentId: "700", status: "queued" });
+    expect(requeued.json().job.id).not.toBe(id);
+    await app.close();
+  });
+
+  it("changes the default feed and updates queued jobs", async () => {
+    const app = await application();
+    await app.inject({
+      method: "PUT",
+      url: "/api/settings/credentials",
+      payload: { username: "fixture-user", password: "fixture-value" }
+    });
+    const selected = await app.inject({
+      method: "PUT",
+      url: "/api/settings/default-feed",
+      payload: { defaultFeed: "INTERNATIONAL" }
+    });
+    expect(selected.statusCode).toBe(200);
+    expect(selected.json()).toEqual({ defaultFeed: "INTERNATIONAL", updatedJobs: 0 });
+
+    await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/catalog/sessions/700/download",
+      payload: { eventId: "p500" }
+    });
+    expect(created.json().job.channel).toBe("INTERNATIONAL");
+
+    const changed = await app.inject({
+      method: "PUT",
+      url: "/api/settings/default-feed",
+      payload: { defaultFeed: "F1 LIVE" }
+    });
+    expect(changed.json()).toEqual({ defaultFeed: "F1 LIVE", updatedJobs: 1 });
+    const jobs = await app.inject({ method: "GET", url: "/api/jobs" });
+    expect(jobs.json().jobs[0].channel).toBe("F1 LIVE");
+
+    const invalid = await app.inject({
+      method: "PUT",
+      url: "/api/settings/default-feed",
+      payload: { defaultFeed: "TRACKSIDE" }
+    });
+    expect(invalid.statusCode).toBe(400);
+    const settings = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(settings.json().defaultFeed).toBe("F1 LIVE");
     await app.close();
   });
 

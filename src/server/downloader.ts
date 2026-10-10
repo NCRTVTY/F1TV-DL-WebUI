@@ -5,6 +5,7 @@ import type { Readable } from "node:stream";
 import type { AppConfig } from "./config";
 import type { Credentials, CredentialVault } from "./crypto";
 import type { AppDatabase, Job } from "./database";
+import { resolveStoredFile } from "./files";
 import { redact } from "./redaction";
 
 const CREDENTIALS_KEY = "f1tv_credentials";
@@ -52,6 +53,8 @@ export class DownloadWorker {
   private timer?: NodeJS.Timeout;
   private busy = false;
   private active?: { jobId: string; child: DownloadChild };
+  private readonly pendingCleanup = new Set<string>();
+  private cleanupBusy = false;
 
   constructor(
     private readonly db: AppDatabase,
@@ -61,8 +64,12 @@ export class DownloadWorker {
 
   start(): void {
     this.db.recoverInterrupted();
+    for (const job of this.db.listJobs()) {
+      if (job.status === "cancelled") this.pendingCleanup.add(job.id);
+    }
     this.timer = setInterval(() => void this.tick(), this.config.workerPollMs);
     this.timer.unref();
+    void this.retryCleanup();
     void this.tick();
   }
 
@@ -72,12 +79,19 @@ export class DownloadWorker {
   }
 
   cancel(jobId: string): boolean {
+    const job = this.db.getJob(jobId);
+    if (job?.status === "cancelled") {
+      this.scheduleCleanup(jobId);
+      return true;
+    }
     const cancelled = this.db.cancelJob(jobId);
     if (cancelled && this.active?.jobId === jobId) {
       terminateProcessTree(this.active.child, "SIGTERM");
       const child = this.active.child;
       const escalation = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 5000);
       escalation.unref();
+    } else if (cancelled) {
+      this.scheduleCleanup(jobId);
     }
     return cancelled;
   }
@@ -87,6 +101,7 @@ export class DownloadWorker {
   }
 
   private async tick(): Promise<void> {
+    void this.retryCleanup();
     if (this.busy) return;
     const job = this.db.claimNext();
     if (!job) return;
@@ -107,7 +122,40 @@ export class DownloadWorker {
     return this.vault.decrypt(encrypted);
   }
 
+  private scheduleCleanup(jobId: string): void {
+    this.pendingCleanup.add(jobId);
+    void this.retryCleanup();
+  }
+
+  private async cleanupJobDirectory(jobId: string): Promise<void> {
+    try {
+      const directory = resolveStoredFile(this.config.downloadDir, jobId);
+      if (directory === path.resolve(this.config.downloadDir)) {
+        this.pendingCleanup.delete(jobId);
+        return;
+      }
+      await fs.promises.rm(directory, { recursive: true, force: true });
+      this.pendingCleanup.delete(jobId);
+    } catch {
+      this.pendingCleanup.add(jobId);
+    }
+  }
+
+  private async retryCleanup(): Promise<void> {
+    if (this.cleanupBusy || this.pendingCleanup.size === 0) return;
+    this.cleanupBusy = true;
+    try {
+      await Promise.all([...this.pendingCleanup].map((jobId) => this.cleanupJobDirectory(jobId)));
+    } finally {
+      this.cleanupBusy = false;
+    }
+  }
+
   private async run(job: Job): Promise<void> {
+    if (this.db.getJob(job.id)?.status === "cancelled") {
+      this.scheduleCleanup(job.id);
+      return;
+    }
     let credentials: Credentials;
     try {
       credentials = this.getCredentials();
@@ -118,6 +166,12 @@ export class DownloadWorker {
 
     const jobDirectory = path.join(this.config.downloadDir, job.id);
     await fs.promises.mkdir(jobDirectory, { recursive: true });
+    if (this.db.getJob(job.id)?.status === "cancelled") {
+      credentials.password = "";
+      credentials.username = "";
+      this.scheduleCleanup(job.id);
+      return;
+    }
     const args = buildArguments(job, jobDirectory);
     let lastMessage = "Download process stopped without producing an MP4 file";
     let timedOut = false;
@@ -191,7 +245,10 @@ export class DownloadWorker {
 
     credentials.password = "";
     credentials.username = "";
-    if (this.db.getJob(job.id)?.status === "cancelled") return;
+    if (this.db.getJob(job.id)?.status === "cancelled") {
+      await this.cleanupJobDirectory(job.id);
+      return;
+    }
 
     const output = await findCompletedMp4(jobDirectory);
     if (!timedOut && exitCode === 0 && output) {

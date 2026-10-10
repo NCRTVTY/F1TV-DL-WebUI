@@ -13,6 +13,7 @@ const stub = path.resolve("tests/fixtures/downloader-stub.sh");
 function workerFixture(timeout: number) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-worker-"));
   directories.push(root);
+  const downloadDir = path.join(root, "downloads");
   const db = new AppDatabase(path.join(root, "data", "test.sqlite"));
   db.setSetting(credentialsSettingKey, "opaque-test-envelope");
   const vault = {
@@ -20,12 +21,12 @@ function workerFixture(timeout: number) {
   } as CredentialVault;
   const worker = new DownloadWorker(db, vault, loadConfig({
     dataDir: path.join(root, "data"),
-    downloadDir: path.join(root, "downloads"),
+    downloadDir,
     f1tvBin: "/bin/sh",
     workerPollMs: 10,
     downloadInactivityTimeoutMs: timeout
   }));
-  return { db, worker };
+  return { db, downloadDir, worker };
 }
 
 afterEach(() => {
@@ -58,6 +59,58 @@ describe("download worker supervision", () => {
     await vi.waitFor(() => {
       expect(db.getJob(job.id)).toMatchObject({ status: "completed", progress: 100 });
     }, { timeout: 3000, interval: 20 });
+
+    worker.stop();
+    db.close();
+  });
+
+  it("cancels a queued job idempotently and removes its partial directory", async () => {
+    const { db, downloadDir, worker } = workerFixture(1000);
+    const job = db.createJob({ url: stub, quality: "best", audio: "eng" });
+    const jobDirectory = path.join(downloadDir, job.id);
+    fs.mkdirSync(jobDirectory, { recursive: true });
+    fs.writeFileSync(path.join(jobDirectory, "partial.mp4"), "partial fixture media");
+
+    expect(worker.cancel(job.id)).toBe(true);
+    expect(worker.cancel(job.id)).toBe(true);
+    await vi.waitFor(() => expect(fs.existsSync(jobDirectory)).toBe(false));
+    expect(db.getJob(job.id)).toMatchObject({ status: "cancelled" });
+
+    worker.stop();
+    db.close();
+  });
+
+  it("terminates a running download and removes its partial directory", async () => {
+    const { db, downloadDir, worker } = workerFixture(1000);
+    const job = db.createJob({ url: stub, quality: "cancel", audio: "eng" });
+    const jobDirectory = path.join(downloadDir, job.id);
+
+    worker.start();
+    await vi.waitFor(() => {
+      expect(db.getJob(job.id)).toMatchObject({ status: "running" });
+      expect(fs.existsSync(path.join(jobDirectory, "partial.mp4"))).toBe(true);
+    }, { timeout: 3000, interval: 20 });
+
+    expect(worker.cancel(job.id)).toBe(true);
+    await vi.waitFor(() => {
+      expect(db.getJob(job.id)).toMatchObject({ status: "cancelled" });
+      expect(fs.existsSync(jobDirectory)).toBe(false);
+    }, { timeout: 3000, interval: 20 });
+
+    worker.stop();
+    db.close();
+  });
+
+  it("retries cleanup for cancelled jobs when the worker starts", async () => {
+    const { db, downloadDir, worker } = workerFixture(1000);
+    const job = db.createJob({ url: stub, quality: "best", audio: "eng" });
+    db.cancelJob(job.id);
+    const jobDirectory = path.join(downloadDir, job.id);
+    fs.mkdirSync(jobDirectory, { recursive: true });
+    fs.writeFileSync(path.join(jobDirectory, "partial.mp4"), "partial fixture media");
+
+    worker.start();
+    await vi.waitFor(() => expect(fs.existsSync(jobDirectory)).toBe(false));
 
     worker.stop();
     db.close();
