@@ -218,6 +218,75 @@ describe("HTTP API", () => {
     await app.close();
   });
 
+  it("removes queued, running, failed, cancelled, and completed jobs with their files", async () => {
+    const jobIds: string[] = [];
+    let completedId = "";
+    let downloadRoot = "";
+    const app = await application((root) => {
+      downloadRoot = path.join(root, "downloads");
+      const db = new AppDatabase(path.join(root, "data", "f1tv-dl-webui.sqlite"));
+
+      const running = db.createJob({ url: "https://f1tv.formula1.com/detail/1/running", quality: "best", audio: "eng" });
+      db.claimNext();
+      const failed = db.createJob({ url: "https://f1tv.formula1.com/detail/2/failed", quality: "best", audio: "eng" });
+      db.claimNext();
+      db.failJob(failed.id, "Fixture failure");
+      const cancelled = db.createJob({ url: "https://f1tv.formula1.com/detail/3/cancelled", quality: "best", audio: "eng" });
+      db.cancelJob(cancelled.id);
+      const completed = db.createJob({ url: "https://f1tv.formula1.com/detail/4/completed", quality: "best", audio: "eng" });
+      db.claimNext();
+      db.completeJob(completed.id, `${completed.id}/race.mp4`);
+      const queued = db.createJob({ url: "https://f1tv.formula1.com/detail/5/queued", quality: "best", audio: "eng" });
+
+      completedId = completed.id;
+      jobIds.push(running.id, failed.id, cancelled.id, completed.id, queued.id);
+      for (const id of jobIds) {
+        const directory = path.join(downloadRoot, id);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, "fixture.mp4"), "fixture media");
+      }
+      db.close();
+    });
+
+    for (const id of jobIds) {
+      const response = await app.inject({ method: "DELETE", url: `/api/jobs/${id}` });
+      expect(response.statusCode).toBe(204);
+    }
+
+    const listed = await app.inject({ method: "GET", url: "/api/jobs" });
+    expect(listed.json().jobs).toEqual([]);
+    for (const id of jobIds) expect(fs.existsSync(path.join(downloadRoot, id))).toBe(false);
+    expect((await app.inject({ method: "DELETE", url: `/api/jobs/${completedId}` })).statusCode).toBe(204);
+    expect((await app.inject({ method: "DELETE", url: "/api/jobs/not-a-uuid" })).statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("broadcasts job removal without a stale update", async () => {
+    const app = await application();
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/jobs/events`);
+    const events = eventReader(response);
+    await app.inject({
+      method: "PUT",
+      url: "/api/settings/credentials",
+      payload: { username: "fixture-user", password: "fixture-value" }
+    });
+    await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/catalog/sessions/700/download",
+      payload: { eventId: "p500" }
+    });
+    const jobId = created.json().job.id as string;
+
+    expect((await app.inject({ method: "DELETE", url: `/api/jobs/${jobId}` })).statusCode).toBe(204);
+    expect(await events.next()).toEqual({ event: "job-removed", data: { jobId } });
+    expect((await app.inject({ method: "GET", url: `/api/jobs/${jobId}` })).statusCode).toBe(404);
+
+    await events.cancel();
+    await app.close();
+  });
+
   it("coalesces a job's changes into a per-job SSE update and preserves its terminal state", async () => {
     const app = await application();
     const address = await app.listen({ host: "127.0.0.1", port: 0 });

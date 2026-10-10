@@ -92,6 +92,25 @@ describe("durable queue", () => {
     unsubscribe();
     db.close();
   });
+
+  it("hard-deletes a job, cascades its conversion, and notifies removal subscribers", () => {
+    const db = database();
+    const removed: string[] = [];
+    const unsubscribe = db.onJobRemoved((jobId) => removed.push(jobId));
+    const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/remove", quality: "best", audio: "eng" });
+    db.claimNext();
+    db.completeJob(job.id, `${job.id}/race.mp4`);
+
+    expect(db.getConversionJob(job.id)).not.toBeNull();
+    expect(db.deleteJob(job.id)).toBe(true);
+    expect(db.deleteJob(job.id)).toBe(false);
+    expect(db.getJob(job.id)).toBeNull();
+    expect(db.getConversionJob(job.id)).toBeNull();
+    expect(removed).toEqual([job.id]);
+
+    unsubscribe();
+    db.close();
+  });
 });
 
 describe("durable conversion queue", () => {

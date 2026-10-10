@@ -10,6 +10,7 @@ import { inspectMedia, isMobileCompatible } from "../src/server/media";
 
 const directories: string[] = [];
 const mediaToolsAvailable = spawnSync("ffmpeg", ["-version"]).status === 0 && spawnSync("ffprobe", ["-version"]).status === 0;
+const ffmpegStub = path.resolve("tests/fixtures/ffmpeg-stub.sh");
 
 function fixture(size: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-converter-"));
@@ -66,6 +67,27 @@ describe.skipIf(!mediaToolsAvailable)("conversion worker FFmpeg integration", ()
     expect(isMobileCompatible(inspection)).toBe(true);
     expect(inspection.displayWidth).toBeLessThanOrEqual(1280);
     expect(inspection.displayHeight).toBeLessThanOrEqual(720);
+    worker.stop();
+    db.close();
+  });
+
+  it("quiesces an active conversion after its download record is hard-deleted", async () => {
+    const { db, download, source, config, worker } = fixture("1920x1080");
+    config.ffmpegBin = ffmpegStub;
+    worker.start();
+    await vi.waitFor(() => {
+      expect(db.getConversionJob(download.id)).toMatchObject({ status: "running" });
+      expect(db.getConversionJob(download.id)?.message).toMatch(/pass 1/);
+    }, { timeout: 10_000, interval: 20 });
+
+    expect(db.deleteJob(download.id)).toBe(true);
+    await worker.remove(download.id);
+    fs.rmSync(path.dirname(source), { recursive: true, force: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(db.getJob(download.id)).toBeNull();
+    expect(db.getConversionJob(download.id)).toBeNull();
+    expect(fs.existsSync(path.dirname(source))).toBe(false);
     worker.stop();
     db.close();
   });

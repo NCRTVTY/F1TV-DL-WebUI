@@ -118,6 +118,7 @@ const toJob = (row: JobRow): Job => ({
 export class AppDatabase {
   private readonly db: Database.Database;
   private readonly jobChangeListeners = new Set<(jobId: string) => void>();
+  private readonly jobRemovalListeners = new Set<(jobId: string) => void>();
   private readonly conversionChangeListeners = new Set<(jobId: string) => void>();
 
   constructor(filename: string) {
@@ -194,6 +195,7 @@ export class AppDatabase {
 
   close(): void {
     this.jobChangeListeners.clear();
+    this.jobRemovalListeners.clear();
     this.conversionChangeListeners.clear();
     this.db.close();
   }
@@ -205,6 +207,15 @@ export class AppDatabase {
 
   private notifyJobChanged(jobId: string): void {
     for (const listener of this.jobChangeListeners) listener(jobId);
+  }
+
+  onJobRemoved(listener: (jobId: string) => void): () => void {
+    this.jobRemovalListeners.add(listener);
+    return () => this.jobRemovalListeners.delete(listener);
+  }
+
+  private notifyJobRemoved(jobId: string): void {
+    for (const listener of this.jobRemovalListeners) listener(jobId);
   }
 
   onConversionChanged(listener: (jobId: string) => void): () => void {
@@ -299,6 +310,12 @@ export class AppDatabase {
   getJob(id: string): Job | null {
     const row = this.db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as JobRow | undefined;
     return row ? toJob(row) : null;
+  }
+
+  deleteJob(id: string): boolean {
+    const result = this.db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
+    if (result.changes === 1) this.notifyJobRemoved(id);
+    return result.changes === 1;
   }
 
   recoverInterrupted(): number {

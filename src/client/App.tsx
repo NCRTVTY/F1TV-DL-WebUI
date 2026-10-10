@@ -271,7 +271,12 @@ function SessionPanel({ configured, defaultFeed, jobs, onQueued, onOpenSettings 
   );
 }
 
-const QueueJobCard = memo(function QueueJobCard({ job, onCancel }: { job: Job; onCancel: (job: Job) => void }) {
+const QueueJobCard = memo(function QueueJobCard({ job, busy, onCancel, onRemove }: {
+  job: Job;
+  busy: boolean;
+  onCancel: (job: Job) => void;
+  onRemove: (job: Job) => void;
+}) {
   return (
     <article className="job-card">
       <div className="job-card__top">
@@ -291,9 +296,12 @@ const QueueJobCard = memo(function QueueJobCard({ job, onCancel }: { job: Job; o
       </div>
       <div className="job-card__footer">
         <p>{job.message}</p>
-        {(job.status === "queued" || job.status === "running") && (
-          <button className="quiet-button" onClick={() => onCancel(job)}>Cancel</button>
-        )}
+        <div className="job-card__actions">
+          {(job.status === "queued" || job.status === "running") && (
+            <button className="quiet-button" disabled={busy} onClick={() => onCancel(job)}>Cancel</button>
+          )}
+          <button className="quiet-button quiet-button--danger" disabled={busy} onClick={() => onRemove(job)}>Remove</button>
+        </div>
       </div>
     </article>
   );
@@ -333,25 +341,76 @@ function CancelDialog({ job, busy, error, onClose, onConfirm }: {
   );
 }
 
-function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) => Promise<void> }) {
-  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
-  const [cancelling, setCancelling] = useState(false);
-  const [cancelError, setCancelError] = useState("");
-  const activeJobs = jobs.filter((job) => job.status !== "completed" && job.status !== "cancelled");
+function RemoveDialog({ job, busy, error, onClose, onConfirm }: {
+  job: Job;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const dismissButton = useRef<HTMLButtonElement>(null);
+  const active = job.status === "queued" || job.status === "running";
 
-  const closeDialog = useCallback(() => {
+  useEffect(() => {
+    dismissButton.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, onClose]);
+
+  return (
+    <div className="dialog-backdrop" role="presentation">
+      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-dialog-title" aria-describedby="remove-dialog-description">
+        <div className="eyebrow">Remove download</div>
+        <h2 id="remove-dialog-title">Remove {jobName(job)}?</h2>
+        <p id="remove-dialog-description">
+          {active ? "The running job will be stopped. " : ""}
+          The job record and every local HQ, LQ, partial, and conversion file will be permanently deleted.
+        </p>
+        {error && <Notice tone="error">{error}</Notice>}
+        <div className="confirm-dialog__actions">
+          <button ref={dismissButton} className="quiet-button" disabled={busy} onClick={onClose}>Keep download</button>
+          <button className="primary-button primary-button--danger" disabled={busy} onClick={onConfirm}>{busy ? "Removing…" : "Remove permanently"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QueuePanel({ jobs, onCancel, onRemove }: {
+  jobs: Job[];
+  onCancel: (id: string) => Promise<void>;
+  onRemove: (id: string) => Promise<void>;
+}) {
+  const [selectedCancelJob, setSelectedCancelJob] = useState<Job | null>(null);
+  const [selectedRemoveJob, setSelectedRemoveJob] = useState<Job | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [cancelError, setCancelError] = useState("");
+  const [removeError, setRemoveError] = useState("");
+  const queueJobs = jobs.filter((job) => job.status !== "completed");
+
+  const closeCancelDialog = useCallback(() => {
     if (cancelling) return;
-    setSelectedJob(null);
+    setSelectedCancelJob(null);
     setCancelError("");
   }, [cancelling]);
 
+  const closeRemoveDialog = useCallback(() => {
+    if (removing) return;
+    setSelectedRemoveJob(null);
+    setRemoveError("");
+  }, [removing]);
+
   async function confirmCancellation() {
-    if (!selectedJob) return;
+    if (!selectedCancelJob) return;
     setCancelling(true);
     setCancelError("");
     try {
-      await onCancel(selectedJob.id);
-      setSelectedJob(null);
+      await onCancel(selectedCancelJob.id);
+      setSelectedCancelJob(null);
     } catch (caught) {
       setCancelError(caught instanceof Error ? caught.message : "Could not cancel the download");
     } finally {
@@ -359,9 +418,28 @@ function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) =>
     }
   }
 
-  function openDialog(job: Job) {
+  async function confirmRemoval() {
+    if (!selectedRemoveJob) return;
+    setRemoving(true);
+    setRemoveError("");
+    try {
+      await onRemove(selectedRemoveJob.id);
+      setSelectedRemoveJob(null);
+    } catch (caught) {
+      setRemoveError(caught instanceof Error ? caught.message : "Could not remove the download");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  function openCancelDialog(job: Job) {
     setCancelError("");
-    setSelectedJob(job);
+    setSelectedCancelJob(job);
+  }
+
+  function openRemoveDialog(job: Job) {
+    setRemoveError("");
+    setSelectedRemoveJob(job);
   }
 
   return (
@@ -371,26 +449,40 @@ function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) =>
           <div className="eyebrow">Download queue</div>
           <h2>One clean line.</h2>
         </div>
-        <span className="count-chip">{activeJobs.length} jobs</span>
+        <span className="count-chip">{queueJobs.length} jobs</span>
       </div>
 
-      {activeJobs.length === 0 ? (
+      {queueJobs.length === 0 ? (
         <div className="empty-state"><span>00</span><p>No queued downloads. Add a session when you’re ready.</p></div>
       ) : (
         <div className="job-list">
-          {activeJobs.map((job) => (
-            <QueueJobCard job={job} key={job.id} onCancel={openDialog} />
+          {queueJobs.map((job) => (
+            <QueueJobCard
+              job={job}
+              busy={removing && selectedRemoveJob?.id === job.id}
+              key={job.id}
+              onCancel={openCancelDialog}
+              onRemove={openRemoveDialog}
+            />
           ))}
         </div>
       )}
-      {selectedJob && <CancelDialog job={selectedJob} busy={cancelling} error={cancelError} onClose={closeDialog} onConfirm={() => void confirmCancellation()} />}
+      {selectedCancelJob && <CancelDialog job={selectedCancelJob} busy={cancelling} error={cancelError} onClose={closeCancelDialog} onConfirm={() => void confirmCancellation()} />}
+      {selectedRemoveJob && <RemoveDialog job={selectedRemoveJob} busy={removing} error={removeError} onClose={closeRemoveDialog} onConfirm={() => void confirmRemoval()} />}
     </section>
   );
 }
 
-function DownloadsPanel({ jobs, onRetry }: { jobs: Job[]; onRetry: (id: string) => Promise<void> }) {
+function DownloadsPanel({ jobs, onRetry, onRemove }: {
+  jobs: Job[];
+  onRetry: (id: string) => Promise<void>;
+  onRemove: (id: string) => Promise<void>;
+}) {
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [selectedRemoveJob, setSelectedRemoveJob] = useState<Job | null>(null);
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
+  const [removeError, setRemoveError] = useState("");
   const downloads = jobs.filter((job) => job.status === "completed" && job.outputFile);
 
   async function retry(jobId: string) {
@@ -402,6 +494,26 @@ function DownloadsPanel({ jobs, onRetry }: { jobs: Job[]; onRetry: (id: string) 
       setError(caught instanceof Error ? caught.message : "Could not retry mobile conversion");
     } finally {
       setRetrying(null);
+    }
+  }
+
+  const closeRemoveDialog = useCallback(() => {
+    if (removing) return;
+    setSelectedRemoveJob(null);
+    setRemoveError("");
+  }, [removing]);
+
+  async function remove() {
+    if (!selectedRemoveJob) return;
+    setRemoving(true);
+    setRemoveError("");
+    try {
+      await onRemove(selectedRemoveJob.id);
+      setSelectedRemoveJob(null);
+    } catch (caught) {
+      setRemoveError(caught instanceof Error ? caught.message : "Could not remove the download");
+    } finally {
+      setRemoving(false);
     }
   }
 
@@ -445,11 +557,19 @@ function DownloadsPanel({ jobs, onRetry }: { jobs: Job[]; onRetry: (id: string) 
                     {job.files?.lq.status === "running" ? `Creating LQ · ${job.files.lq.progress}%` : "LQ queued"}
                   </button>
                 )}
+                <button
+                  className="quiet-button quiet-button--danger"
+                  disabled={removing && selectedRemoveJob?.id === job.id}
+                  onClick={() => { setRemoveError(""); setSelectedRemoveJob(job); }}
+                >
+                  {removing && selectedRemoveJob?.id === job.id ? "Removing…" : "Remove"}
+                </button>
               </div>
             </article>
           ))}
         </div>
       )}
+      {selectedRemoveJob && <RemoveDialog job={selectedRemoveJob} busy={removing} error={removeError} onClose={closeRemoveDialog} onConfirm={() => void remove()} />}
     </section>
   );
 }
@@ -579,7 +699,22 @@ export function App() {
           setJobs((current) => mergeJob(current, job));
           setOnline(true);
         })
-        .catch(() => setOnline(false));
+        .catch(() => {
+          if (jobRequestVersions.current.get(jobId) === version) setOnline(false);
+        });
+    });
+    events.addEventListener("job-removed", (event) => {
+      let jobId: string;
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data) as { jobId?: unknown };
+        if (typeof payload.jobId !== "string" || !payload.jobId) return;
+        jobId = payload.jobId;
+      } catch {
+        return;
+      }
+      jobRequestVersions.current.set(jobId, (jobRequestVersions.current.get(jobId) ?? 0) + 1);
+      setJobs((current) => current.filter((job) => job.id !== jobId));
+      setOnline(true);
     });
 
     return () => events.close();
@@ -588,7 +723,13 @@ export function App() {
   const activeCount = useMemo(() => jobs.filter((job) => job.status === "queued" || job.status === "running").length, [jobs]);
 
   const cancel = useCallback(async (id: string) => {
-    await api<{ job: Job }>(`/api/jobs/${id}/cancel`, { method: "POST" });
+    const response = await api<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+    setJobs((current) => mergeJob(current, response.job));
+  }, []);
+
+  const removeJob = useCallback(async (id: string) => {
+    await api<void>(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+    jobRequestVersions.current.set(id, (jobRequestVersions.current.get(id) ?? 0) + 1);
     setJobs((current) => current.filter((job) => job.id !== id));
   }, []);
 
@@ -626,8 +767,8 @@ export function App() {
             <h1>{tab === "sessions" ? "Pick the session.\nKeep the race." : navigation.find((item) => item.id === tab)?.label}</h1>
           </div>
           {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} defaultFeed={settings.defaultFeed} jobs={jobs} onQueued={(job) => setJobs((current) => [job, ...current])} onOpenSettings={() => setTab("settings")} />}
-          {tab === "queue" && <QueuePanel jobs={jobs} onCancel={cancel} />}
-          {tab === "downloads" && <DownloadsPanel jobs={jobs} onRetry={retryConversion} />}
+          {tab === "queue" && <QueuePanel jobs={jobs} onCancel={cancel} onRemove={removeJob} />}
+          {tab === "downloads" && <DownloadsPanel jobs={jobs} onRetry={retryConversion} onRemove={removeJob} />}
           {tab === "settings" && <SettingsPanel settings={settings} onChanged={async () => { await Promise.all([refreshSettings(), refreshJobs()]); }} />}
         </main>
       </div>

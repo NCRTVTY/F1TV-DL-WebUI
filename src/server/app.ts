@@ -10,6 +10,7 @@ import { AppDatabase, type Job } from "./database";
 import { credentialsSettingKey, DownloadWorker } from "./downloader";
 import { ConversionWorker } from "./converter";
 import { fileMetadata, parseRange, resolveStoredFile } from "./files";
+import { isJobId, JobRemovalCoordinator } from "./removal";
 import { catalogDownloadSchema, catalogRefreshSchema, credentialsSchema, defaultFeedSchema } from "./validation";
 
 export interface BuildAppOptions {
@@ -35,9 +36,17 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   const vault = new CredentialVault(config.encryptionKey);
   const worker = new DownloadWorker(db, vault, config);
   const conversionWorker = new ConversionWorker(db, config);
+  const removalCoordinator = new JobRemovalCoordinator(
+    db,
+    worker,
+    conversionWorker,
+    config.downloadDir,
+    (jobId) => app.log.warn({ jobId }, "Download directory cleanup will be retried")
+  );
   const catalog = new CatalogService(db, catalogFetch, now, calendarFetch);
   const eventStreams = new Set<PassThrough>();
 
+  await removalCoordinator.start();
   if (startWorker) {
     worker.start();
     conversionWorker.start();
@@ -60,6 +69,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   });
 
   app.addHook("onClose", async () => {
+    removalCoordinator.stop();
     worker.stop();
     conversionWorker.stop();
     db.close();
@@ -156,12 +166,25 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   app.get("/api/jobs/events", async (_request, reply) => {
     const stream = new PassThrough();
     const pendingJobIds = new Set<string>();
-    const unsubscribe = db.onJobChanged((jobId) => pendingJobIds.add(jobId));
-    const unsubscribeConversions = db.onConversionChanged((jobId) => pendingJobIds.add(jobId));
+    const pendingRemovedJobIds = new Set<string>();
+    const unsubscribe = db.onJobChanged((jobId) => {
+      if (!pendingRemovedJobIds.has(jobId)) pendingJobIds.add(jobId);
+    });
+    const unsubscribeConversions = db.onConversionChanged((jobId) => {
+      if (!pendingRemovedJobIds.has(jobId)) pendingJobIds.add(jobId);
+    });
+    const unsubscribeRemovals = db.onJobRemoved((jobId) => {
+      pendingJobIds.delete(jobId);
+      pendingRemovedJobIds.add(jobId);
+    });
     const flush = setInterval(() => {
+      for (const jobId of pendingRemovedJobIds) {
+        stream.write(`event: job-removed\ndata: ${JSON.stringify({ jobId })}\n\n`);
+      }
       for (const jobId of pendingJobIds) {
         stream.write(`event: job-update\ndata: ${JSON.stringify({ jobId })}\n\n`);
       }
+      pendingRemovedJobIds.clear();
       pendingJobIds.clear();
     }, 500);
     flush.unref();
@@ -173,6 +196,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
       clearInterval(flush);
       unsubscribe();
       unsubscribeConversions();
+      unsubscribeRemovals();
       eventStreams.delete(stream);
     };
     reply.raw.once("close", close);
@@ -272,6 +296,12 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
     if (!job) return reply.status(404).send({ error: "Download not found" });
     if (!worker.cancel(job.id)) return reply.status(409).send({ error: "Download can no longer be cancelled" });
     return reply.send({ job: db.getJob(job.id) });
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/jobs/:id", async (request, reply) => {
+    if (!isJobId(request.params.id)) return reply.status(400).send({ error: "Invalid download identifier" });
+    await removalCoordinator.remove(request.params.id);
+    return reply.status(204).send();
   });
 
   app.get("/api/downloads", async () => ({

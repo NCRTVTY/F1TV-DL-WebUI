@@ -52,7 +52,10 @@ async function findCompletedMp4(directory: string): Promise<string | null> {
 export class DownloadWorker {
   private timer?: NodeJS.Timeout;
   private busy = false;
+  private currentJobId?: string;
   private active?: { jobId: string; child: DownloadChild };
+  private readonly removalWaiters = new Map<string, Set<() => void>>();
+  private readonly removing = new Set<string>();
   private readonly pendingCleanup = new Set<string>();
   private cleanupBusy = false;
 
@@ -85,15 +88,41 @@ export class DownloadWorker {
       return true;
     }
     const cancelled = this.db.cancelJob(jobId);
-    if (cancelled && this.active?.jobId === jobId) {
-      terminateProcessTree(this.active.child, "SIGTERM");
-      const child = this.active.child;
-      const escalation = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 5000);
-      escalation.unref();
+    if (cancelled && this.currentJobId === jobId) {
+      if (this.active?.jobId === jobId) {
+        terminateProcessTree(this.active.child, "SIGTERM");
+        const child = this.active.child;
+        const escalation = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 5000);
+        escalation.unref();
+      }
     } else if (cancelled) {
       this.scheduleCleanup(jobId);
     }
     return cancelled;
+  }
+
+  async remove(jobId: string): Promise<void> {
+    this.pendingCleanup.delete(jobId);
+    this.removing.add(jobId);
+    if (this.currentJobId !== jobId) {
+      this.removing.delete(jobId);
+      return;
+    }
+
+    const settled = new Promise<void>((resolve) => {
+      const waiters = this.removalWaiters.get(jobId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.removalWaiters.set(jobId, waiters);
+    });
+    const child = this.active?.jobId === jobId ? this.active.child : undefined;
+    let escalation: NodeJS.Timeout | undefined;
+    if (child) {
+      terminateProcessTree(child, "SIGTERM");
+      escalation = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 5000);
+      escalation.unref();
+    }
+    await settled;
+    if (escalation) clearTimeout(escalation);
   }
 
   wake(): void {
@@ -107,11 +136,16 @@ export class DownloadWorker {
     if (!job) return;
 
     this.busy = true;
+    this.currentJobId = job.id;
     try {
       await this.run(job);
     } finally {
       this.active = undefined;
+      this.currentJobId = undefined;
       this.busy = false;
+      this.removing.delete(job.id);
+      for (const resolve of this.removalWaiters.get(job.id) ?? []) resolve();
+      this.removalWaiters.delete(job.id);
       queueMicrotask(() => void this.tick());
     }
   }
@@ -152,7 +186,9 @@ export class DownloadWorker {
   }
 
   private async run(job: Job): Promise<void> {
-    if (this.db.getJob(job.id)?.status === "cancelled") {
+    const initial = this.db.getJob(job.id);
+    if (!initial || this.removing.has(job.id)) return;
+    if (initial.status === "cancelled") {
       this.scheduleCleanup(job.id);
       return;
     }
@@ -166,7 +202,13 @@ export class DownloadWorker {
 
     const jobDirectory = path.join(this.config.downloadDir, job.id);
     await fs.promises.mkdir(jobDirectory, { recursive: true });
-    if (this.db.getJob(job.id)?.status === "cancelled") {
+    const beforeSpawn = this.db.getJob(job.id);
+    if (!beforeSpawn || this.removing.has(job.id)) {
+      credentials.password = "";
+      credentials.username = "";
+      return;
+    }
+    if (beforeSpawn.status === "cancelled") {
       credentials.password = "";
       credentials.username = "";
       this.scheduleCleanup(job.id);
@@ -245,7 +287,9 @@ export class DownloadWorker {
 
     credentials.password = "";
     credentials.username = "";
-    if (this.db.getJob(job.id)?.status === "cancelled") {
+    const finalJob = this.db.getJob(job.id);
+    if (!finalJob || this.removing.has(job.id)) return;
+    if (finalJob.status === "cancelled") {
       await this.cleanupJobDirectory(job.id);
       return;
     }

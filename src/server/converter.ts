@@ -39,7 +39,10 @@ export class ConversionWorker {
   private busy = false;
   private ready = false;
   private stopping = false;
+  private currentJobId?: string;
   private active?: MediaChild;
+  private readonly removalWaiters = new Map<string, Set<() => void>>();
+  private readonly removing = new Set<string>();
   private unsubscribe?: () => void;
 
   constructor(private readonly db: AppDatabase, private readonly config: AppConfig) {}
@@ -69,17 +72,53 @@ export class ConversionWorker {
     queueMicrotask(() => void this.tick());
   }
 
+  async remove(jobId: string): Promise<void> {
+    this.removing.add(jobId);
+    if (this.currentJobId !== jobId) {
+      this.removing.delete(jobId);
+      return;
+    }
+
+    const settled = new Promise<void>((resolve) => {
+      const waiters = this.removalWaiters.get(jobId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.removalWaiters.set(jobId, waiters);
+    });
+    const child = this.active;
+    let escalation: NodeJS.Timeout | undefined;
+    if (child) {
+      terminateProcessTree(child, "SIGTERM");
+      escalation = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 5000);
+      escalation.unref();
+    }
+    await settled;
+    if (escalation) clearTimeout(escalation);
+  }
+
+  private removed(jobId: string): boolean {
+    return this.removing.has(jobId) || !this.db.getJob(jobId);
+  }
+
+  private settle(jobId: string): void {
+    if (this.currentJobId === jobId) this.currentJobId = undefined;
+    this.active = undefined;
+    this.removing.delete(jobId);
+    for (const resolve of this.removalWaiters.get(jobId) ?? []) resolve();
+    this.removalWaiters.delete(jobId);
+  }
+
   private async tick(): Promise<void> {
     if (this.stopping || !this.ready || this.busy) return;
     const job = this.db.claimNextConversion();
     if (!job) return;
     this.busy = true;
+    this.currentJobId = job.downloadJobId;
     try {
       await this.run(job);
     } catch (error) {
       if (!this.stopping) this.db.failConversion(job.downloadJobId, conciseError(error));
     } finally {
-      this.active = undefined;
+      this.settle(job.downloadJobId);
       this.busy = false;
       if (!this.stopping) queueMicrotask(() => void this.tick());
     }
@@ -89,18 +128,22 @@ export class ConversionWorker {
     this.db.ensureConversionJobs();
     for (const conversion of this.db.listConversionJobs()) {
       if (this.stopping) return;
-      const download = this.db.getJob(conversion.downloadJobId);
-      if (!download?.outputFile || download.status !== "completed") continue;
-      const source = resolveStoredFile(this.config.downloadDir, download.outputFile);
-      const expectedRelative = mobileOutputRelative(download.outputFile);
-      const expected = resolveStoredFile(this.config.downloadDir, expectedRelative);
-      await removeConversionArtifacts(expected);
-
+      const jobId = conversion.downloadJobId;
+      this.currentJobId = jobId;
       try {
+        const download = this.db.getJob(jobId);
+        if (!download?.outputFile || download.status !== "completed" || this.removing.has(jobId)) continue;
+        const source = resolveStoredFile(this.config.downloadDir, download.outputFile);
+        const expectedRelative = mobileOutputRelative(download.outputFile);
+        const expected = resolveStoredFile(this.config.downloadDir, expectedRelative);
+        await removeConversionArtifacts(expected);
+        if (this.removed(jobId)) continue;
+
         const recordedRelative = conversion.outputFile;
         if (conversion.status === "completed" && recordedRelative) {
           const recorded = resolveStoredFile(this.config.downloadDir, recordedRelative);
           const inspection = await inspectMedia(this.config.ffprobeBin, recorded);
+          if (this.removed(jobId)) continue;
           if (isMobileCompatible(inspection)) {
             this.db.completeConversion(download.id, recordedRelative, inspection.size, recordedRelative === download.outputFile);
             continue;
@@ -109,12 +152,18 @@ export class ConversionWorker {
         }
 
         if (await this.adoptIfValid(download.id, expectedRelative, expected, false)) continue;
+        if (this.removed(jobId)) continue;
         const sourceInspection = await inspectMedia(this.config.ffprobeBin, source);
+        if (this.removed(jobId)) continue;
         if (isMobileCompatible(sourceInspection)) {
           this.db.completeConversion(download.id, download.outputFile, sourceInspection.size, true);
         }
       } catch {
-        if (conversion.status === "completed") this.db.requeueConversion(download.id, "Mobile MP4 needs to be rebuilt");
+        if (!this.removed(jobId) && conversion.status === "completed") {
+          this.db.requeueConversion(jobId, "Mobile MP4 needs to be rebuilt");
+        }
+      } finally {
+        this.settle(jobId);
       }
     }
   }
@@ -132,27 +181,35 @@ export class ConversionWorker {
 
   private async run(job: ConversionJob): Promise<void> {
     const download = this.db.getJob(job.downloadJobId);
+    if (this.removing.has(job.downloadJobId)) return;
     if (!download?.outputFile || download.status !== "completed") throw new Error("The completed HQ download is unavailable");
     const source = resolveStoredFile(this.config.downloadDir, download.outputFile);
     const finalRelative = mobileOutputRelative(download.outputFile);
     const finalFilename = resolveStoredFile(this.config.downloadDir, finalRelative);
     const { temporary, passlog } = conversionPaths(finalFilename);
     await removeConversionArtifacts(finalFilename);
+    if (this.removed(job.downloadJobId)) return;
 
     this.db.updateConversionProgress(job.downloadJobId, 1, "Inspecting HQ file");
     const sourceInspection = await inspectMedia(this.config.ffprobeBin, source);
+    if (this.removed(job.downloadJobId)) return;
     if (isMobileCompatible(sourceInspection)) {
       this.db.completeConversion(job.downloadJobId, download.outputFile, sourceInspection.size, true);
       return;
     }
     if (await this.adoptIfValid(job.downloadJobId, finalRelative, finalFilename, false)) return;
+    if (this.removed(job.downloadJobId)) return;
 
     const bitrate = mobileVideoBitrate(sourceInspection.durationSeconds);
     await fs.promises.mkdir(path.dirname(finalFilename), { recursive: true });
+    if (this.removed(job.downloadJobId)) return;
     try {
       await this.runPass(job.downloadJobId, sourceInspection.durationSeconds, 1, source, temporary, passlog, bitrate);
+      if (this.removed(job.downloadJobId)) return;
       await this.runPass(job.downloadJobId, sourceInspection.durationSeconds, 2, source, temporary, passlog, bitrate);
+      if (this.removed(job.downloadJobId)) return;
       const converted = await inspectMedia(this.config.ffprobeBin, temporary);
+      if (this.removed(job.downloadJobId)) return;
       if (!isMobileCompatible(converted)) {
         if (converted.size >= MOBILE_MAX_BYTES) throw new Error("Converted MP4 exceeded the 3 GB limit");
         throw new Error("Converted MP4 failed Android compatibility validation");
@@ -220,6 +277,7 @@ export class ConversionWorker {
     if (escalationTimer) clearTimeout(escalationTimer);
     this.active = undefined;
     if (this.stopping) throw new Error("Conversion stopped during server shutdown");
+    if (this.removed(downloadJobId)) throw new Error("Conversion removed");
     if (timedOut) throw new Error("FFmpeg conversion became unresponsive");
     if (exitCode !== 0) throw new Error(`FFmpeg pass ${pass} failed${errorText ? `: ${conciseError(errorText)}` : ""}`);
   }

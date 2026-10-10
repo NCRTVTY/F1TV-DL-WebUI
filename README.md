@@ -18,7 +18,7 @@ Current status: the application is deployed on Harlem. Its server discovers the 
 - Queue a replay with one click; the server derives the session URL and defaults to best quality, English audio, and the `F1 LIVE` feed.
 - Switch the default feed between `F1 LIVE` and `INTERNATIONAL` in Settings; queued jobs follow the selected default immediately.
 - Process one durable download at a time and recover an interrupted job after restart.
-- View progress, failures, completed downloads, and cancel queued or active work.
+- View progress, failures, completed downloads, cancel queued or active work, and permanently remove any job with all local files.
 - Keep the original HQ MP4 and independently create or reuse an Android-compatible 720p H.264/AAC MP4 below 3 GB.
 - Download either HQ or LQ with the exact file size shown; both variants support HTTP range requests.
 - Use a responsive phone and tablet interface.

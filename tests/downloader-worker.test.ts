@@ -103,6 +103,28 @@ describe("download worker supervision", () => {
     db.close();
   });
 
+  it("quiesces a running download after its database row is hard-deleted", async () => {
+    const { db, downloadDir, worker } = workerFixture(1000);
+    const job = db.createJob({ url: stub, quality: "cancel", audio: "eng" });
+    const jobDirectory = path.join(downloadDir, job.id);
+
+    worker.start();
+    await vi.waitFor(() => {
+      expect(db.getJob(job.id)).toMatchObject({ status: "running" });
+      expect(fs.existsSync(path.join(jobDirectory, "partial.mp4"))).toBe(true);
+    }, { timeout: 3000, interval: 20 });
+
+    expect(db.deleteJob(job.id)).toBe(true);
+    await worker.remove(job.id);
+    fs.rmSync(jobDirectory, { recursive: true, force: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(db.getJob(job.id)).toBeNull();
+    expect(fs.existsSync(jobDirectory)).toBe(false);
+    worker.stop();
+    db.close();
+  });
+
   it("retries cleanup for cancelled jobs when the worker starts", async () => {
     const { db, downloadDir, worker } = workerFixture(1000);
     const job = db.createJob({ url: stub, quality: "best", audio: "eng" });
