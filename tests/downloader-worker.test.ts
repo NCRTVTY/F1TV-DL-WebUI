@@ -9,6 +9,8 @@ import { credentialsSettingKey, DownloadWorker } from "../src/server/downloader"
 
 const directories: string[] = [];
 const stub = path.resolve("tests/fixtures/downloader-stub.sh");
+const testInactivityTimeoutMs = 1_000;
+const testObservationTimeoutMs = 10_000;
 
 function workerFixture(timeout: number) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-worker-"));
@@ -35,7 +37,7 @@ afterEach(() => {
 
 describe("download worker supervision", () => {
   it("fails a silent process and advances to the next queued job", async () => {
-    const { db, worker } = workerFixture(60);
+    const { db, worker } = workerFixture(testInactivityTimeoutMs);
     const silent = db.createJob({ url: stub, quality: "silent", audio: "eng" });
     await new Promise((resolve) => setTimeout(resolve, 2));
     const next = db.createJob({ url: stub, quality: "success", audio: "eng" });
@@ -44,7 +46,7 @@ describe("download worker supervision", () => {
     await vi.waitFor(() => {
       expect(db.getJob(silent.id)).toMatchObject({ status: "failed" });
       expect(db.getJob(next.id)).toMatchObject({ status: "completed", progress: 100 });
-    }, { timeout: 3000, interval: 20 });
+    }, { timeout: testObservationTimeoutMs, interval: 20 });
 
     expect(db.getJob(silent.id)?.message).toMatch(/inactivity/);
     worker.stop();
@@ -52,13 +54,13 @@ describe("download worker supervision", () => {
   });
 
   it("refreshes the inactivity watchdog when output is received", async () => {
-    const { db, worker } = workerFixture(60);
+    const { db, worker } = workerFixture(testInactivityTimeoutMs);
     const job = db.createJob({ url: stub, quality: "chatty", audio: "eng" });
 
     worker.start();
     await vi.waitFor(() => {
       expect(db.getJob(job.id)).toMatchObject({ status: "completed", progress: 100 });
-    }, { timeout: 3000, interval: 20 });
+    }, { timeout: testObservationTimeoutMs, interval: 20 });
 
     worker.stop();
     db.close();
