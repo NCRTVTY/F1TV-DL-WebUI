@@ -2,6 +2,12 @@
 
 Self-hosted, tablet-friendly web UI for `f1tv-dl` with encrypted F1 TV credential settings, direct session submission, a durable download queue, and MP4 playback or download.
 
+## Implementation handoff
+
+See [DOCS/IMPLEMENTATION-SPEC.md](DOCS/IMPLEMENTATION-SPEC.md) for the complete requirements, architecture, upstream integration findings, security requirements, deployment instructions, and acceptance criteria.
+
+Current status: the initial direct-URL feature slice is implemented. Live F1 TV compatibility and production deployment have not yet been verified.
+
 ## Current feature slice
 
 - Configure or remove F1 TV credentials without returning stored values to the browser.
