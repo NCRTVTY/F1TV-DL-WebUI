@@ -10,6 +10,7 @@ export interface AppConfig {
   commit: string;
   f1tvBin: string;
   workerPollMs: number;
+  downloadInactivityTimeoutMs: number;
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {
@@ -29,6 +30,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     commit: process.env.DRONE_COMMIT || "development",
     f1tvBin: path.resolve(process.env.F1TV_DL_BIN || path.join(root, "node_modules", ".bin", "f1tv-dl")),
     workerPollMs: positiveInteger(process.env.WORKER_POLL_MS, 1000),
+    downloadInactivityTimeoutMs: positiveInteger(process.env.DOWNLOAD_INACTIVITY_TIMEOUT_MS, 300000),
     ...overrides
   };
 }

@@ -61,6 +61,8 @@ Runtime state uses two paths:
 
 `APP_ENCRYPTION_KEY` is mandatory. It must be at least 24 characters and should be stable across deployments; changing it makes previously stored credentials unreadable.
 
+The worker fails a downloader process after five minutes without output and then advances to the next queued job. Override the watchdog with `DOWNLOAD_INACTIVITY_TIMEOUT_MS` when slower storage or network conditions require a longer interval.
+
 ## Harlem deployment
 
 Drone is the only production deployment path. Pushes to `main` run on the Harlem Linux/AMD64 runner, verify the repository, build an immutable commit-tagged image, push it to `docker-registry.nc:17788/f1tv-dl-webui`, deploy with Compose, and verify the exact commit through `/api/health`.

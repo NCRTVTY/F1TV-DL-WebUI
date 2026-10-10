@@ -120,6 +120,9 @@ export class DownloadWorker {
     await fs.promises.mkdir(jobDirectory, { recursive: true });
     const args = buildArguments(job, jobDirectory);
     let lastMessage = "Download process stopped without producing an MP4 file";
+    let timedOut = false;
+    let inactivityTimer: NodeJS.Timeout | undefined;
+    let escalationTimer: NodeJS.Timeout | undefined;
 
     const child = spawn(this.config.f1tvBin, args, {
       cwd: process.cwd(),
@@ -136,8 +139,23 @@ export class DownloadWorker {
     });
     this.active = { jobId: job.id, child };
 
+    const armInactivityTimeout = (): void => {
+      if (timedOut) return;
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        timedOut = true;
+        lastMessage = `Download process became unresponsive after ${Math.ceil(this.config.downloadInactivityTimeoutMs / 60000)} minute(s) of inactivity`;
+        terminateProcessTree(child, "SIGTERM");
+        escalationTimer = setTimeout(() => terminateProcessTree(child, "SIGKILL"), 5000);
+        escalationTimer.unref();
+      }, this.config.downloadInactivityTimeoutMs);
+      inactivityTimer.unref();
+    };
+
     const consume = (chunk: Buffer): void => {
+      armInactivityTimeout();
       const clean = redact(chunk.toString("utf8"), [credentials.username, credentials.password]);
+      if (timedOut) return;
       const progressMatches = [...clean.matchAll(/Percent Complete=\s*(\d{1,3})%/g)];
       const progress = Number(progressMatches.at(-1)?.[1]);
       const lines = clean.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean);
@@ -151,6 +169,7 @@ export class DownloadWorker {
     };
     child.stdout.on("data", consume);
     child.stderr.on("data", consume);
+    armInactivityTimeout();
 
     const exitCode = await new Promise<number | null>((resolve) => {
       let settled = false;
@@ -167,12 +186,15 @@ export class DownloadWorker {
       child.once("close", finish);
     });
 
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    if (escalationTimer) clearTimeout(escalationTimer);
+
     credentials.password = "";
     credentials.username = "";
     if (this.db.getJob(job.id)?.status === "cancelled") return;
 
     const output = await findCompletedMp4(jobDirectory);
-    if (exitCode === 0 && output) {
+    if (!timedOut && exitCode === 0 && output) {
       this.db.completeJob(job.id, path.relative(this.config.downloadDir, output));
     } else {
       this.db.failJob(job.id, lastMessage);
