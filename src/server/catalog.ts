@@ -1,6 +1,7 @@
 import type { AppDatabase } from "./database";
 
 const BASE_URL = "https://f1tv.formula1.com";
+const CALENDAR_BASE_URL = "https://www.formula1.com";
 const MENU_PATH = "/2.0/A/ENG/WEB_DASH/ALL/MENU/ANONYMOUS/2";
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
@@ -23,7 +24,20 @@ export interface CatalogEvent {
   startDate: string | null;
   endDate: string | null;
   complete: boolean;
+  status: CatalogEventStatus;
+  replayAvailable: boolean;
   thumbnailUrl: string | null;
+}
+
+export type CatalogEventStatus = "completed" | "current" | "future";
+
+export interface CalendarEvent {
+  round: number;
+  season: number;
+  title: string;
+  country: string;
+  startDate: string;
+  endDate: string;
 }
 
 export type CatalogSessionType = "Practice" | "Qualifying" | "Sprint Qualifying" | "Sprint" | "Race";
@@ -50,6 +64,7 @@ export interface CatalogResult<T> {
 }
 
 export type CatalogFetch = (path: string) => Promise<unknown>;
+export type CalendarFetch = (year: number) => Promise<string>;
 
 interface CacheEnvelope<T> {
   fetchedAt: string;
@@ -131,6 +146,106 @@ function canonicalDetailUrl(action: JsonObject | null, contentId: string): strin
   url.search = "";
   url.hash = "";
   return url.toString();
+}
+
+function decodeHtml(value: string): string {
+  const codePoint = (raw: string, radix: number): string => {
+    const parsed = Number.parseInt(raw, radix);
+    return parsed >= 0 && parsed <= 0x10ffff ? String.fromCodePoint(parsed) : "";
+  };
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_match, code: string) => codePoint(code, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => codePoint(code, 16));
+}
+
+function plainText(html: string): string {
+  return decodeHtml(html.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+
+function calendarDates(value: string, year: number): { startDate: string; endDate: string } | null {
+  const months: Record<string, number> = {
+    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+  };
+  const crossMonth = value.match(/\b(\d{1,2})\s+([A-Za-z]{3})\s*-\s*(\d{1,2})\s+([A-Za-z]{3})\b/i);
+  const sameMonth = value.match(/\b(\d{1,2})\s*-\s*(\d{1,2})\s+([A-Za-z]{3})\b/i);
+  const startDay = Number(crossMonth?.[1] ?? sameMonth?.[1]);
+  const endDay = Number(crossMonth?.[3] ?? sameMonth?.[2]);
+  const startMonth = months[(crossMonth?.[2] ?? sameMonth?.[3] ?? "").toLowerCase()];
+  const endMonth = months[(crossMonth?.[4] ?? sameMonth?.[3] ?? "").toLowerCase()];
+  if (!startDay || !endDay || startMonth === undefined || endMonth === undefined) return null;
+  const start = new Date(Date.UTC(year, startMonth, startDay));
+  const end = new Date(Date.UTC(year, endMonth, endDay, 23, 59, 59, 999));
+  if (start.getUTCDate() !== startDay || end.getUTCDate() !== endDay) return null;
+  return { startDate: start.toISOString(), endDate: end.toISOString() };
+}
+
+function eventStatus(startDate: string | null, endDate: string | null, now: Date, fallbackComplete = false): CatalogEventStatus {
+  const start = startDate ? new Date(startDate).getTime() : Number.NaN;
+  const end = endDate ? new Date(endDate).getTime() : Number.NaN;
+  if (Number.isFinite(start) && now.getTime() < start) return "future";
+  if (Number.isFinite(end) && now.getTime() <= end) return "current";
+  return fallbackComplete || Number.isFinite(end) ? "completed" : "future";
+}
+
+export function parseCalendar(html: string, year: number): CalendarEvent[] {
+  if (!Number.isInteger(year) || year < 1950 || year > 2100 || html.length > 5_000_000) return [];
+  const events = new Map<number, CalendarEvent>();
+  const anchorPattern = /<a\b(?=[^>]*\bhref="\/en\/racing\/(\d{4})\/([^"]+)")(?=[^>]*\bdata-f1rd-a7s-context="([^"]+)")[^>]*>([\s\S]*?)<\/a>/gi;
+  for (const match of html.matchAll(anchorPattern)) {
+    if (Number(match[1]) !== year || /pre-season-testing/i.test(match[2] ?? "")) continue;
+    const body = plainText(match[4] ?? "");
+    const round = Number(body.match(/\bROUND\s+(\d{1,2})\b/i)?.[1]);
+    const dates = calendarDates(body, year);
+    if (!Number.isInteger(round) || round < 1 || round > 30 || !dates) continue;
+    try {
+      const context = JSON.parse(Buffer.from(match[3] ?? "", "base64").toString("utf8")) as JsonObject;
+      const title = text(context.raceName);
+      const country = text(context.trackCountry, 120);
+      if (!/FORMULA 1/i.test(title) || !/GRAND PRIX|GRAN PREMIO|GRANDE PRÊMIO/i.test(title) || !country) continue;
+      events.set(round, { round, season: year, title, country, ...dates });
+    } catch {
+      continue;
+    }
+  }
+  return [...events.values()].sort((left, right) => left.round - right.round);
+}
+
+export function mergeCalendarEvents(
+  season: CatalogSeason,
+  providerEvents: CatalogEvent[],
+  calendarEvents: CalendarEvent[],
+  now = new Date()
+): CatalogEvent[] {
+  const providerByRound = new Map(providerEvents.filter((event) => event.round !== null).map((event) => [event.round as number, event]));
+  const merged: CatalogEvent[] = calendarEvents.map((scheduled) => {
+    const provider = providerByRound.get(scheduled.round);
+    const status = eventStatus(scheduled.startDate, scheduled.endDate, now);
+    return {
+      id: provider?.id ?? `c${season.year}-r${scheduled.round}`,
+      seasonId: season.id,
+      season: season.year,
+      round: scheduled.round,
+      title: provider?.title || scheduled.title,
+      country: provider?.country || scheduled.country,
+      startDate: scheduled.startDate,
+      endDate: scheduled.endDate,
+      complete: status === "completed",
+      status,
+      replayAvailable: Boolean(provider),
+      thumbnailUrl: provider?.thumbnailUrl ?? null
+    } satisfies CatalogEvent;
+  });
+  const knownIds = new Set(merged.filter((event) => event.replayAvailable).map((event) => event.id));
+  for (const provider of providerEvents) {
+    if (!knownIds.has(provider.id) && !merged.some((event) => event.round !== null && event.round === provider.round)) merged.push(provider);
+  }
+  return merged.sort((left, right) => (left.round ?? 999) - (right.round ?? 999) || left.title.localeCompare(right.title));
 }
 
 function classifySession(metadata: JsonObject): CatalogSessionType | null {
@@ -223,9 +338,10 @@ export function parseEvents(input: unknown, season: CatalogSeason, now = new Dat
     const isMeeting = text(metadata.contentSubtype).toUpperCase() === "MEETING" || text(attributes.VideoType).toLowerCase() === "meetings";
     const isTest = text(attributes.IsTestEvent).toLowerCase() === "true" || /test/i.test(text(attributes.Meeting_Name));
     const title = text(attributes.Meeting_Official_Name) || text(attributes.Global_Title) || text(metadata.title);
-    if (pageId && isMeeting && !isTest && /grand prix/i.test(title)) {
+    if (pageId && isMeeting && !isTest && /grand prix|gran premio|grande prêmio/i.test(title)) {
       const startDate = isoDate(attributes.Meeting_Start_Date);
       const endDate = isoDate(attributes.Meeting_End_Date);
+      const status = eventStatus(startDate, endDate, now);
       const id = `p${pageId}`;
       events.set(id, {
         id,
@@ -236,7 +352,9 @@ export function parseEvents(input: unknown, season: CatalogSeason, now = new Dat
         country: text(attributes.Meeting_Country_Name) || null,
         startDate,
         endDate,
-        complete: Boolean(endDate && new Date(endDate).getTime() < now.getTime()),
+        complete: status === "completed",
+        status,
+        replayAvailable: true,
         thumbnailUrl: thumbnailUrl(metadata.pictureUrl)
       });
     }
@@ -261,6 +379,8 @@ export function parseEvents(input: unknown, season: CatalogSeason, now = new Dat
           startDate: session.startDate,
           endDate: session.endDate,
           complete: true,
+          status: "completed",
+          replayAvailable: true,
           thumbnailUrl: session.thumbnailUrl
         });
       }
@@ -284,11 +404,26 @@ export function createCatalogFetch(): CatalogFetch {
   };
 }
 
+export function createCalendarFetch(): CalendarFetch {
+  return async (year: number): Promise<string> => {
+    if (!Number.isInteger(year) || year < 1950 || year > 2100) throw new Error("Invalid Formula 1 calendar year");
+    const url = new URL(`/en/racing/${year}`, CALENDAR_BASE_URL);
+    if (url.hostname !== "www.formula1.com" || url.protocol !== "https:") throw new Error("Formula 1 returned an unsupported calendar host");
+    const response = await fetch(url, {
+      headers: { Accept: "text/html", "User-Agent": "F1TV-DL-WebUI/0.1" },
+      signal: AbortSignal.timeout(20_000)
+    });
+    if (!response.ok) throw new Error(`Formula 1 calendar request failed (${response.status})`);
+    return response.text();
+  };
+}
+
 export class CatalogService {
   constructor(
     private readonly db: AppDatabase,
     private readonly fetchJson: CatalogFetch = createCatalogFetch(),
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    private readonly fetchCalendar: CalendarFetch = createCalendarFetch()
   ) {}
 
   private readCache<T>(key: string): CacheEnvelope<T> | null {
@@ -347,13 +482,22 @@ export class CatalogService {
     const seasons = await this.seasons(false);
     const season = seasons.data.find((candidate) => candidate.id === seasonId);
     if (!season) throw new Error("Season is not available in the F1TV catalog");
-    const result = await this.cached(`events:${seasonId}`, refresh, async () => {
-      const events = parseEvents(await this.fetchJson(this.pagePath(seasonId)), season, this.now());
-      if (!events.length) throw new Error("F1TV returned no Formula 1 events for this season");
-      return events;
+    let calendarWarning: string | undefined;
+    const result = await this.cached(`events:v2:${seasonId}`, refresh, async () => {
+      const providerEvents = parseEvents(await this.fetchJson(this.pagePath(seasonId)), season, this.now());
+      if (!providerEvents.length) throw new Error("F1TV returned no Formula 1 events for this season");
+      if (!season.current) return providerEvents;
+      try {
+        const calendar = await this.calendar(season.year, refresh);
+        calendarWarning = calendar.warning;
+        return mergeCalendarEvents(season, providerEvents, calendar.data, this.now());
+      } catch (error) {
+        calendarWarning = error instanceof Error ? error.message : "Formula 1 calendar refresh failed";
+        return providerEvents;
+      }
     });
     for (const event of result.data) this.db.setSetting(`catalog:event:${event.id}`, JSON.stringify(event));
-    return result;
+    return calendarWarning ? { ...result, stale: true, warning: calendarWarning } : result;
   }
 
   async sessions(eventId: string, refresh = false): Promise<CatalogResult<CatalogSession[]>> {
@@ -374,5 +518,13 @@ export class CatalogService {
 
   private pagePath(pageId: string): string {
     return `/2.0/A/ENG/WEB_DASH/ALL/PAGE/${pageId}/ANONYMOUS/2`;
+  }
+
+  private async calendar(year: number, refresh: boolean): Promise<CatalogResult<CalendarEvent[]>> {
+    return this.cached(`calendar:v1:${year}`, refresh, async () => {
+      const events = parseCalendar(await this.fetchCalendar(year), year);
+      if (!events.length) throw new Error("Formula 1 returned no scheduled races for this season");
+      return events;
+    });
   }
 }

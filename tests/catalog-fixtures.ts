@@ -96,6 +96,26 @@ export const eventFixture = {
   }
 };
 
+function calendarCard(round: number, country: string, slug: string, dates: string) {
+  const context = Buffer.from(JSON.stringify({
+    raceName: `FORMULA 1 ${country.toUpperCase()} GRAND PRIX 2026`,
+    trackCountry: country
+  })).toString("base64");
+  return `<a data-f1rd-a7s-context="${context}" href="/en/racing/2026/${slug}"><span>ROUND ${round}</span><strong>${country}</strong><span>${dates}</span></a>`;
+}
+
+export const calendarFixture = [
+  calendarCard(1, "Australia", "australia", "06 - 08 Mar"),
+  calendarCard(17, "Singapore", "singapore", "09 - 11 Oct"),
+  calendarCard(18, "United States", "united-states", "23 - 25 Oct"),
+  calendarCard(23, "Abu Dhabi", "abu-dhabi", "04 - 06 Dec")
+].join("");
+
+export const fixtureCalendarFetch = async (year: number): Promise<string> => {
+  if (year !== 2026) throw new Error(`Unexpected calendar year: ${year}`);
+  return calendarFixture;
+};
+
 export const fixtureFetch = async (path: string): Promise<unknown> => {
   if (path.includes("/MENU/")) return menuFixture;
   if (path.includes("/PAGE/493/")) return archiveFixture;

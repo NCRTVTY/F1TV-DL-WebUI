@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/server/app";
 import { loadConfig } from "../src/server/config";
-import { fixtureFetch } from "./catalog-fixtures";
+import { fixtureCalendarFetch, fixtureFetch } from "./catalog-fixtures";
 
 const directories: string[] = [];
 
@@ -14,6 +14,7 @@ async function application() {
   return buildApp({
     startWorker: false,
     catalogFetch: fixtureFetch,
+    calendarFetch: fixtureCalendarFetch,
     now: () => new Date("2026-10-10T12:00:00Z"),
     config: loadConfig({
       dataDir: path.join(root, "data"),
@@ -49,6 +50,11 @@ describe("HTTP API", () => {
 
     const events = await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
     expect(events.json().data[0]).toMatchObject({ id: "p500", country: "Australia" });
+    expect(events.json().data).toHaveLength(4);
+    expect(events.json().data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ country: "Singapore", status: "current", replayAvailable: false }),
+      expect.objectContaining({ country: "United States", status: "future", replayAvailable: false })
+    ]));
 
     const sessions = await app.inject({ method: "GET", url: "/api/catalog/events/p500/sessions" });
     expect(sessions.json().data).toHaveLength(1);

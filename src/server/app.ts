@@ -3,7 +3,7 @@ import path from "node:path";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { AppConfig } from "./config";
-import { CatalogService, type CatalogFetch } from "./catalog";
+import { CatalogService, type CalendarFetch, type CatalogFetch } from "./catalog";
 import { CredentialVault } from "./crypto";
 import { AppDatabase } from "./database";
 import { credentialsSettingKey, DownloadWorker } from "./downloader";
@@ -14,10 +14,11 @@ export interface BuildAppOptions {
   config: AppConfig;
   startWorker?: boolean;
   catalogFetch?: CatalogFetch;
+  calendarFetch?: CalendarFetch;
   now?: () => Date;
 }
 
-export async function buildApp({ config, startWorker = true, catalogFetch, now }: BuildAppOptions): Promise<FastifyInstance> {
+export async function buildApp({ config, startWorker = true, catalogFetch, calendarFetch, now }: BuildAppOptions): Promise<FastifyInstance> {
   fs.mkdirSync(config.dataDir, { recursive: true });
   fs.mkdirSync(config.downloadDir, { recursive: true });
 
@@ -31,7 +32,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, now }
   const db = new AppDatabase(path.join(config.dataDir, "f1tv-dl-webui.sqlite"));
   const vault = new CredentialVault(config.encryptionKey);
   const worker = new DownloadWorker(db, vault, config);
-  const catalog = new CatalogService(db, catalogFetch, now);
+  const catalog = new CatalogService(db, catalogFetch, now, calendarFetch);
 
   if (startWorker) worker.start();
 

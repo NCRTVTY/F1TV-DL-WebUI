@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CatalogService, parseEvents, parseSeasons, parseSessions } from "../src/server/catalog";
+import { CatalogService, mergeCalendarEvents, parseCalendar, parseEvents, parseSeasons, parseSessions } from "../src/server/catalog";
 import { AppDatabase } from "../src/server/database";
-import { archiveFixture, eventFixture, fixtureFetch, menuFixture, seasonFixture } from "./catalog-fixtures";
+import { archiveFixture, calendarFixture, eventFixture, fixtureFetch, menuFixture, seasonFixture } from "./catalog-fixtures";
 
 const directories: string[] = [];
 const now = new Date("2026-10-10T12:00:00Z");
@@ -32,6 +32,20 @@ describe("F1TV catalog normalization", () => {
     expect(parseEvents(seasonFixture, season, now)).toEqual([expect.objectContaining({
       id: "p500", round: 1, country: "Australia", complete: true
     })]);
+    const localizedTitle = JSON.parse(JSON.stringify(seasonFixture).replace("GRAND PRIX", "GRAN PREMIO")) as unknown;
+    expect(parseEvents(localizedTitle, season, now)).toHaveLength(1);
+  });
+
+  it("merges the complete calendar with replay events and marks event states", () => {
+    const season = { id: "100", year: 2026, title: "2026 Season", current: true };
+    const calendar = parseCalendar(calendarFixture, 2026);
+    expect(calendar.map((event) => event.round)).toEqual([1, 17, 18, 23]);
+
+    const merged = mergeCalendarEvents(season, parseEvents(seasonFixture, season, now), calendar, now);
+    expect(merged).toHaveLength(4);
+    expect(merged[0]).toMatchObject({ id: "p500", status: "completed", replayAvailable: true });
+    expect(merged[1]).toMatchObject({ id: "c2026-r17", status: "current", replayAvailable: false });
+    expect(merged[2]).toMatchObject({ status: "future", replayAvailable: false });
   });
 
   it("keeps only supported Formula 1 replays and derives a canonical URL", () => {

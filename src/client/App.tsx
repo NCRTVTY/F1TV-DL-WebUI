@@ -23,7 +23,8 @@ interface Job {
 interface CatalogSeason { id: string; year: number; title: string; current: boolean }
 interface CatalogEvent {
   id: string; seasonId: string; season: number; round: number | null; title: string; country: string | null;
-  startDate: string | null; endDate: string | null; complete: boolean; thumbnailUrl: string | null;
+  startDate: string | null; endDate: string | null; complete: boolean; status: "completed" | "current" | "future";
+  replayAvailable: boolean; thumbnailUrl: string | null;
 }
 interface CatalogSession {
   id: string; eventId: string; title: string; type: string; startDate: string | null; endDate: string | null;
@@ -75,6 +76,15 @@ function displayDate(value: string | null): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
+function eventDate(event: CatalogEvent): string {
+  if (!event.startDate) return "Date unavailable";
+  const start = new Date(event.startDate);
+  const end = event.endDate ? new Date(event.endDate) : start;
+  const formatMonth = (date: Date) => new Intl.DateTimeFormat(undefined, { month: "short" }).format(date);
+  if (start.getMonth() === end.getMonth()) return `${start.getDate()}–${end.getDate()} ${formatMonth(end)}`;
+  return `${start.getDate()} ${formatMonth(start)}–${end.getDate()} ${formatMonth(end)}`;
+}
+
 function relativeTime(value: string): string {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   if (seconds < 60) return "just now";
@@ -119,9 +129,10 @@ function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
     setWarning(result.warning || "");
     setRefreshedAt(result.refreshedAt);
     setEventId((current) => {
-      if (result.data.some((event) => event.id === current)) return current;
-      const completed = result.data.filter((event) => event.complete);
-      return completed.at(-1)?.id || result.data[0]?.id || "";
+      if (result.data.some((event) => event.id === current && event.replayAvailable && event.status !== "future")) return current;
+      const ongoing = result.data.find((event) => event.status === "current" && event.replayAvailable);
+      const completed = result.data.filter((event) => event.status === "completed" && event.replayAvailable);
+      return ongoing?.id || completed.at(-1)?.id || "";
     });
   }, []);
 
@@ -211,7 +222,15 @@ function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
       {loading && events.length === 0 ? <div className="empty-state"><span>F1</span><p>Loading the F1TV catalog…</p></div> : (
         <>
           <div className="event-strip" aria-label="Grand Prix events">
-            {events.map((event) => <button key={event.id} className={event.id === eventId ? "active" : ""} onClick={() => setEventId(event.id)}><small>{event.round ? `Round ${event.round}` : event.season}</small><strong>{event.country || event.title.replace(/Formula 1|Grand Prix/gi, "").replace(/\b(?:19|20)\d{2}\b/g, "").trim()}</strong><span>{event.complete ? "Replay available" : displayDate(event.startDate)}</span></button>)}
+            {events.map((event) => {
+              const disabled = event.status === "future" || !event.replayAvailable;
+              const label = event.status === "current"
+                ? "This weekend"
+                : event.status === "future"
+                  ? `Future · ${eventDate(event)}`
+                  : event.replayAvailable ? "Replay available" : "Replay unavailable";
+              return <button key={event.id} disabled={disabled} aria-current={event.status === "current" ? "date" : undefined} className={`${event.id === eventId ? "active " : ""}event-card--${event.status}`} onClick={() => setEventId(event.id)}><small>{event.round ? `Round ${event.round}` : event.season}</small><strong>{event.country || event.title.replace(/Formula 1|Grand Prix/gi, "").replace(/\b(?:19|20)\d{2}\b/g, "").trim()}</strong><span>{label}</span></button>;
+            })}
           </div>
 
           <div className="section-heading catalog-session-heading"><div><div className="eyebrow">Available sessions</div><h3>{events.find((event) => event.id === eventId)?.title || "Select an event"}</h3></div><span className="count-chip">{sessions.length} sessions</span></div>

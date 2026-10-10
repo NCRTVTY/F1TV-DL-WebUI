@@ -13,7 +13,8 @@ Current status: the application is deployed on Harlem. Its server discovers the 
 - Configure or remove F1 TV credentials without returning stored values to the browser.
 - Encrypt credentials at rest with AES-256-GCM using a deployment-provided key.
 - Browse every season exposed by F1TV, with the dynamically discovered current season selected by default.
-- Browse Formula 1 Grand Prix events and their practice, qualifying, sprint, sprint qualifying, and race replays.
+- See the complete current-season Formula 1 calendar in a wrapping grid, with completed replays, the active weekend, and disabled future rounds clearly distinguished.
+- Browse each available Grand Prix's practice, qualifying, sprint, sprint qualifying, and race replays.
 - Queue a replay with one click; the server derives the session URL and defaults to best quality, English audio, and the INTERNATIONAL feed.
 - Process one durable download at a time and recover an interrupted job after restart.
 - View progress, failures, completed downloads, and cancel queued or active work.
