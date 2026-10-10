@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Tab = "sessions" | "queue" | "downloads" | "settings";
 type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -69,6 +69,15 @@ function sessionName(url: string): string {
 
 function jobName(job: Job): string {
   return job.title || sessionName(job.url);
+}
+
+function mergeJob(jobs: Job[], job: Job): Job[] {
+  const index = jobs.findIndex((candidate) => candidate.id === job.id);
+  if (index === -1) return [job, ...jobs];
+  if (jobs[index] === job) return jobs;
+  const next = [...jobs];
+  next[index] = job;
+  return next;
 }
 
 function displayDate(value: string | null): string {
@@ -251,6 +260,34 @@ function SessionPanel({ configured, jobs, onQueued, onOpenSettings }: {
   );
 }
 
+const QueueJobCard = memo(function QueueJobCard({ job, onCancel }: { job: Job; onCancel: (id: string) => Promise<void> }) {
+  return (
+    <article className="job-card">
+      <div className="job-card__top">
+        <div>
+          <span className={`status status--${job.status}`}>{job.status}</span>
+          <h3>{jobName(job)}</h3>
+        </div>
+        <span className="job-time">{relativeTime(job.createdAt)}</span>
+      </div>
+      <div className="progress-track" aria-label={`${job.progress}% complete`}>
+        <span style={{ width: `${job.progress}%` }} />
+      </div>
+      <div className="job-meta">
+        <span>{job.quality === "best" ? "Best quality" : job.quality}</span>
+        <span>{job.audio.toUpperCase()}</span>
+        {job.channel && <span>{job.channel}</span>}
+      </div>
+      <div className="job-card__footer">
+        <p>{job.message}</p>
+        {(job.status === "queued" || job.status === "running") && (
+          <button className="quiet-button" onClick={() => void onCancel(job.id)}>Cancel</button>
+        )}
+      </div>
+    </article>
+  );
+});
+
 function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) => Promise<void> }) {
   const activeJobs = jobs.filter((job) => job.status !== "completed");
   return (
@@ -268,29 +305,7 @@ function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) =>
       ) : (
         <div className="job-list">
           {activeJobs.map((job) => (
-            <article className="job-card" key={job.id}>
-              <div className="job-card__top">
-                <div>
-                  <span className={`status status--${job.status}`}>{job.status}</span>
-                  <h3>{jobName(job)}</h3>
-                </div>
-                <span className="job-time">{relativeTime(job.createdAt)}</span>
-              </div>
-              <div className="progress-track" aria-label={`${job.progress}% complete`}>
-                <span style={{ width: `${job.progress}%` }} />
-              </div>
-              <div className="job-meta">
-                <span>{job.quality === "best" ? "Best quality" : job.quality}</span>
-                <span>{job.audio.toUpperCase()}</span>
-                {job.channel && <span>{job.channel}</span>}
-              </div>
-              <div className="job-card__footer">
-                <p>{job.message}</p>
-                {(job.status === "queued" || job.status === "running") && (
-                  <button className="quiet-button" onClick={() => void onCancel(job.id)}>Cancel</button>
-                )}
-              </div>
-            </article>
+            <QueueJobCard job={job} key={job.id} onCancel={onCancel} />
           ))}
         </div>
       )}
@@ -387,6 +402,7 @@ export function App() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [settings, setSettings] = useState<Settings>({ credentialsConfigured: false, encryptionReady: false, port: 43729 });
   const [online, setOnline] = useState(true);
+  const jobRequestVersions = useRef(new Map<string, number>());
 
   const refreshSettings = useCallback(async () => {
     const next = await api<Settings>("/api/settings");
@@ -404,16 +420,40 @@ export function App() {
   useEffect(() => {
     void refreshSettings().catch(() => setOnline(false));
     void refreshJobs();
-    const interval = window.setInterval(() => void refreshJobs(), 1500);
-    return () => window.clearInterval(interval);
+
+    const events = new EventSource("/api/jobs/events");
+    events.onopen = () => setOnline(true);
+    events.onerror = () => setOnline(false);
+    events.addEventListener("job-update", (event) => {
+      let jobId: string;
+      try {
+        const payload = JSON.parse((event as MessageEvent<string>).data) as { jobId?: unknown };
+        if (typeof payload.jobId !== "string" || !payload.jobId) return;
+        jobId = payload.jobId;
+      } catch {
+        return;
+      }
+
+      const version = (jobRequestVersions.current.get(jobId) ?? 0) + 1;
+      jobRequestVersions.current.set(jobId, version);
+      void api<{ job: Job }>(`/api/jobs/${encodeURIComponent(jobId)}`)
+        .then(({ job }) => {
+          if (jobRequestVersions.current.get(jobId) !== version) return;
+          setJobs((current) => mergeJob(current, job));
+          setOnline(true);
+        })
+        .catch(() => setOnline(false));
+    });
+
+    return () => events.close();
   }, [refreshJobs, refreshSettings]);
 
   const activeCount = useMemo(() => jobs.filter((job) => job.status === "queued" || job.status === "running").length, [jobs]);
 
-  async function cancel(id: string) {
-    await api(`/api/jobs/${id}/cancel`, { method: "POST" });
-    await refreshJobs();
-  }
+  const cancel = useCallback(async (id: string) => {
+    const { job } = await api<{ job: Job }>(`/api/jobs/${id}/cancel`, { method: "POST" });
+    setJobs((current) => mergeJob(current, job));
+  }, []);
 
   return (
     <div className="app-shell">

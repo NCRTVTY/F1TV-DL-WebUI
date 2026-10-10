@@ -67,6 +67,7 @@ const toJob = (row: JobRow): Job => ({
 
 export class AppDatabase {
   private readonly db: Database.Database;
+  private readonly jobChangeListeners = new Set<(jobId: string) => void>();
 
   constructor(filename: string) {
     fs.mkdirSync(path.dirname(filename), { recursive: true });
@@ -110,7 +111,17 @@ export class AppDatabase {
   }
 
   close(): void {
+    this.jobChangeListeners.clear();
     this.db.close();
+  }
+
+  onJobChanged(listener: (jobId: string) => void): () => void {
+    this.jobChangeListeners.add(listener);
+    return () => this.jobChangeListeners.delete(listener);
+  }
+
+  private notifyJobChanged(jobId: string): void {
+    for (const listener of this.jobChangeListeners) listener(jobId);
   }
 
   getSetting(key: string): string | null {
@@ -151,6 +162,7 @@ export class AppDatabase {
       INSERT INTO jobs (id, url, quality, audio, channel, content_id, title, status, progress, message, output_file, created_at, started_at, finished_at)
       VALUES (@id, @url, @quality, @audio, @channel, @contentId, @title, @status, @progress, @message, @outputFile, @createdAt, @startedAt, @finishedAt)
     `).run(job);
+    this.notifyJobChanged(job.id);
     return job;
   }
 
@@ -174,11 +186,13 @@ export class AppDatabase {
   }
 
   recoverInterrupted(): number {
+    const interrupted = this.db.prepare("SELECT id FROM jobs WHERE status = 'running'").all() as Array<{ id: string }>;
     const result = this.db.prepare(`
       UPDATE jobs
       SET status = 'queued', progress = 0, message = 'Recovered after restart', started_at = NULL, finished_at = NULL
       WHERE status = 'running'
     `).run();
+    for (const job of interrupted) this.notifyJobChanged(job.id);
     return result.changes;
   }
 
@@ -193,27 +207,32 @@ export class AppDatabase {
       `).run(now, row.id);
       return result.changes === 1 ? this.getJob(row.id) : null;
     });
-    return claim();
+    const job = claim();
+    if (job) this.notifyJobChanged(job.id);
+    return job;
   }
 
   updateProgress(id: string, progress: number, message: string): void {
-    this.db.prepare(`
+    const result = this.db.prepare(`
       UPDATE jobs SET progress = ?, message = ? WHERE id = ? AND status = 'running'
     `).run(Math.max(0, Math.min(99, Math.floor(progress))), message.slice(0, 500), id);
+    if (result.changes === 1) this.notifyJobChanged(id);
   }
 
   completeJob(id: string, outputFile: string): void {
-    this.db.prepare(`
+    const result = this.db.prepare(`
       UPDATE jobs SET status = 'completed', progress = 100, message = 'Download complete', output_file = ?, finished_at = ?
       WHERE id = ? AND status = 'running'
     `).run(outputFile, new Date().toISOString(), id);
+    if (result.changes === 1) this.notifyJobChanged(id);
   }
 
   failJob(id: string, message: string): void {
-    this.db.prepare(`
+    const result = this.db.prepare(`
       UPDATE jobs SET status = 'failed', message = ?, finished_at = ?
       WHERE id = ? AND status = 'running'
     `).run(message.slice(0, 500), new Date().toISOString(), id);
+    if (result.changes === 1) this.notifyJobChanged(id);
   }
 
   cancelJob(id: string): boolean {
@@ -221,6 +240,7 @@ export class AppDatabase {
       UPDATE jobs SET status = 'cancelled', message = 'Cancelled', finished_at = ?
       WHERE id = ? AND status IN ('queued', 'running')
     `).run(new Date().toISOString(), id);
+    if (result.changes === 1) this.notifyJobChanged(id);
     return result.changes === 1;
   }
 

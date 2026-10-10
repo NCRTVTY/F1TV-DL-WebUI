@@ -37,4 +37,21 @@ describe("durable queue", () => {
     expect(db.getJob(job.id)).toMatchObject({ status: "queued", message: "Recovered after restart" });
     db.close();
   });
+
+  it("notifies subscribers after each successful job mutation", () => {
+    const db = database();
+    const changed: string[] = [];
+    const unsubscribe = db.onJobChanged((jobId) => changed.push(jobId));
+    const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/events", quality: "best", audio: "eng" });
+
+    db.claimNext();
+    db.updateProgress(job.id, 27, "Downloading · 27%");
+    db.completeJob(job.id, `${job.id}/race.mp4`);
+    db.updateProgress(job.id, 50, "Too late");
+    expect(db.cancelJob(job.id)).toBe(false);
+
+    expect(changed).toEqual([job.id, job.id, job.id, job.id]);
+    unsubscribe();
+    db.close();
+  });
 });

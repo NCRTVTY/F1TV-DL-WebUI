@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { AppConfig } from "./config";
@@ -33,6 +34,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   const vault = new CredentialVault(config.encryptionKey);
   const worker = new DownloadWorker(db, vault, config);
   const catalog = new CatalogService(db, catalogFetch, now, calendarFetch);
+  const eventStreams = new Set<PassThrough>();
 
   if (startWorker) worker.start();
 
@@ -42,8 +44,14 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
     reply.header("Referrer-Policy", "no-referrer");
     reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     reply.header("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https://f1tv.formula1.com; connect-src 'self'; script-src 'self'; style-src 'self'");
-    if (request.url.startsWith("/api/")) reply.header("Cache-Control", "no-store");
+    if (request.url === "/api/jobs/events") reply.header("Cache-Control", "no-cache, no-transform");
+    else if (request.url.startsWith("/api/")) reply.header("Cache-Control", "no-store");
     return payload;
+  });
+
+  app.addHook("preClose", async () => {
+    for (const stream of eventStreams) stream.end();
+    eventStreams.clear();
   });
 
   app.addHook("onClose", async () => {
@@ -92,6 +100,43 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   });
 
   app.get("/api/jobs", async () => ({ jobs: db.listJobs() }));
+
+  app.get("/api/jobs/events", async (_request, reply) => {
+    const stream = new PassThrough();
+    const pendingJobIds = new Set<string>();
+    const unsubscribe = db.onJobChanged((jobId) => pendingJobIds.add(jobId));
+    const flush = setInterval(() => {
+      for (const jobId of pendingJobIds) {
+        stream.write(`event: job-update\ndata: ${JSON.stringify({ jobId })}\n\n`);
+      }
+      pendingJobIds.clear();
+    }, 500);
+    flush.unref();
+
+    let closed = false;
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      clearInterval(flush);
+      unsubscribe();
+      eventStreams.delete(stream);
+    };
+    reply.raw.once("close", close);
+    stream.once("close", close);
+    eventStreams.add(stream);
+
+    stream.write(": connected\n\n");
+    reply.type("text/event-stream; charset=utf-8");
+    reply.header("Connection", "keep-alive");
+    reply.header("X-Accel-Buffering", "no");
+    return reply.send(stream);
+  });
+
+  app.get<{ Params: { id: string } }>("/api/jobs/:id", async (request, reply) => {
+    const job = db.getJob(request.params.id);
+    if (!job) return reply.status(404).send({ error: "Download not found" });
+    return reply.send({ job });
+  });
 
   const catalogError = (reply: FastifyReply, error: unknown) => {
     const message = error instanceof Error ? error.message : "F1TV catalog request failed";
