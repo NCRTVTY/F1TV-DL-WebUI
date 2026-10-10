@@ -1,4 +1,5 @@
 import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api";
 
 type Tab = "sessions" | "queue" | "downloads" | "settings";
 type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -46,19 +47,6 @@ const navigation: Array<{ id: Tab; label: string; marker: string }> = [
   { id: "downloads", label: "Downloads", marker: "03" },
   { id: "settings", label: "Settings", marker: "04" }
 ];
-
-async function api<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers }
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({ error: "Request failed" })) as { error?: string };
-    throw new Error(body.error || `Request failed (${response.status})`);
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
-}
 
 function sessionName(url: string): string {
   try {
