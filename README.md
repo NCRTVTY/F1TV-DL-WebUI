@@ -49,7 +49,7 @@ This runs TypeScript checks, unit and API tests, and production builds for the c
 
 ## Container
 
-The runtime image includes Chromium, FFmpeg, FFprobe, and the pinned `@thedave42/f1tv-dl` CLI. The upstream package references an unpublished scoped FFmpeg wrapper, so `package.json` reproducibly redirects that dependency to its compatible public `fluent-ffmpeg` release.
+The runtime image includes Chromium, FFmpeg, FFprobe, and the pinned `@thedave42/f1tv-dl` CLI. The legacy upstream package references an unpublished scoped FFmpeg wrapper and stale transitive packages. `package.json` reproducibly redirects the wrapper to its compatible public `fluent-ffmpeg` release and pins security-supported transitive versions. The post-install compatibility patch replaces one removed Puppeteer delay helper; it fails closed if the expected upstream source changes. A production dependency audit currently reports zero known vulnerabilities.
 
 Runtime state uses two paths:
 

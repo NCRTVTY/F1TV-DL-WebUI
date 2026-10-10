@@ -4,6 +4,12 @@ import { loadConfig } from "./config";
 async function main(): Promise<void> {
   const config = loadConfig();
   const app = await buildApp({ config });
+  const shutdown = async (): Promise<void> => {
+    await app.close();
+    process.exit(0);
+  };
+  process.once("SIGTERM", () => void shutdown());
+  process.once("SIGINT", () => void shutdown());
   await app.listen({ host: config.host, port: config.port });
 }
 

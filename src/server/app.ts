@@ -31,14 +31,25 @@ export async function buildApp({ config, startWorker = true }: BuildAppOptions):
 
   if (startWorker) worker.start();
 
+  app.addHook("onSend", async (request, reply, payload) => {
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("X-Frame-Options", "DENY");
+    reply.header("Referrer-Policy", "no-referrer");
+    reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    reply.header("Content-Security-Policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; connect-src 'self'; script-src 'self'; style-src 'self'");
+    if (request.url.startsWith("/api/")) reply.header("Cache-Control", "no-store");
+    return payload;
+  });
+
   app.addHook("onClose", async () => {
     worker.stop();
     db.close();
   });
 
   app.setErrorHandler((error, _request, reply) => {
-    const status = error.statusCode && error.statusCode >= 400 ? error.statusCode : 500;
-    const message = status >= 500 ? "The server could not complete the request" : error.message;
+    const candidate = error as { statusCode?: number; message?: string };
+    const status = candidate.statusCode && candidate.statusCode >= 400 ? candidate.statusCode : 500;
+    const message = status >= 500 ? "The server could not complete the request" : candidate.message || "Request failed";
     reply.status(status).send({ error: message });
   });
 

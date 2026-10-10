@@ -33,6 +33,8 @@ describe("HTTP API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, commit: "test-commit", storage: { writable: true } });
     expect(response.body).not.toContain("xxxxxxxx");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
     await app.close();
   });
 

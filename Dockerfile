@@ -4,6 +4,7 @@ WORKDIR /app
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 COPY package.json package-lock.json ./
+COPY scripts ./scripts
 RUN npm ci --no-audit --no-fund
 
 COPY index.html vite.config.ts vitest.config.ts tsconfig.client.json tsconfig.server.json ./
