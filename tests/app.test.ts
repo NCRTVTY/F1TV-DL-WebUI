@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/server/app";
 import { loadConfig } from "../src/server/config";
+import { AppDatabase } from "../src/server/database";
 import { fixtureCalendarFetch, fixtureFetch } from "./catalog-fixtures";
 
 const directories: string[] = [];
@@ -35,9 +36,10 @@ function eventReader(response: Response) {
   };
 }
 
-async function application() {
+async function application(setup?: (root: string) => void) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-app-"));
   directories.push(root);
+  setup?.(root);
   return buildApp({
     startWorker: false,
     catalogFetch: fixtureFetch,
@@ -249,6 +251,72 @@ describe("HTTP API", () => {
     expect(current.json().job).toMatchObject({ id: jobId, status: "cancelled", message: "Cancelled" });
 
     await events.cancel();
+    await app.close();
+  });
+
+  it("reports exact HQ/LQ sizes and serves only validated file variants with ranges", async () => {
+    let jobId = "";
+    const hq = Buffer.from("high quality fixture media");
+    const lq = Buffer.from("mobile fixture media");
+    const app = await application((root) => {
+      const db = new AppDatabase(path.join(root, "data", "f1tv-dl-webui.sqlite"));
+      const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/files", quality: "best", audio: "eng", title: "Fixture Race" });
+      jobId = job.id;
+      db.claimNext();
+      const directory = path.join(root, "downloads", job.id);
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "race.mp4"), hq);
+      fs.writeFileSync(path.join(directory, "race-720p-mobile.mp4"), lq);
+      db.completeJob(job.id, `${job.id}/race.mp4`);
+      db.completeConversion(job.id, `${job.id}/race-720p-mobile.mp4`, lq.length, false);
+      db.close();
+    });
+
+    const jobs = await app.inject({ method: "GET", url: "/api/jobs" });
+    expect(jobs.json().jobs[0]).toMatchObject({
+      id: jobId,
+      files: {
+        hq: { available: true, size: hq.length },
+        lq: { available: true, size: lq.length, status: "completed", sourceReused: false }
+      }
+    });
+
+    const partial = await app.inject({
+      method: "GET",
+      url: `/api/downloads/${jobId}/file?variant=lq&download=1`,
+      headers: { range: "bytes=0-5" }
+    });
+    expect(partial.statusCode).toBe(206);
+    expect(partial.body).toBe("mobile");
+    expect(partial.headers["content-range"]).toBe(`bytes 0-5/${lq.length}`);
+    expect(partial.headers["content-disposition"]).toContain("race-720p-mobile.mp4");
+
+    const invalid = await app.inject({ method: "GET", url: `/api/downloads/${jobId}/file?variant=source` });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("requeues a failed LQ conversion without affecting the completed HQ download", async () => {
+    let jobId = "";
+    const app = await application((root) => {
+      const db = new AppDatabase(path.join(root, "data", "f1tv-dl-webui.sqlite"));
+      const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/retry", quality: "best", audio: "eng" });
+      jobId = job.id;
+      db.claimNext();
+      const directory = path.join(root, "downloads", job.id);
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "race.mp4"), "hq fixture");
+      db.completeJob(job.id, `${job.id}/race.mp4`);
+      db.claimNextConversion();
+      db.failConversion(job.id, "Fixture conversion failure");
+      db.close();
+    });
+
+    const retried = await app.inject({ method: "POST", url: `/api/downloads/${jobId}/lq/retry` });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json().job).toMatchObject({ status: "completed", files: { lq: { status: "queued", progress: 0 } } });
+    const repeated = await app.inject({ method: "POST", url: `/api/downloads/${jobId}/lq/retry` });
+    expect(repeated.statusCode).toBe(409);
     await app.close();
   });
 });

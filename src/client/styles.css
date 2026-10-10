@@ -139,6 +139,11 @@ main { padding: 58px clamp(28px, 6vw, 90px) 100px; max-width: 1140px; width: 100
 .download-card p { color: var(--muted); font-size: 12px; }
 .download-actions { display: flex; gap: 10px; margin-top: auto; }
 .download-actions .quiet-button { min-height: 40px; }
+.download-actions a, .download-actions button { flex: 1; text-align: center; }
+.download-actions button:disabled { cursor: wait; opacity: .58; }
+.conversion-state { min-height: 18px; margin: 10px 0 0 !important; overflow-wrap: anywhere; }
+.conversion-progress { height: 5px; margin-top: 14px; overflow: hidden; background: #242c35; }
+.conversion-progress > div { height: 100%; background: var(--red); transition: width .35s ease; }
 
 .credential-state { display: flex; align-items: center; gap: 14px; padding: 18px; background: #0d1218; border: 1px solid var(--line); }
 .credential-state div { display: grid; gap: 3px; }

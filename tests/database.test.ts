@@ -93,3 +93,54 @@ describe("durable queue", () => {
     db.close();
   });
 });
+
+describe("durable conversion queue", () => {
+  it("creates and claims a conversion independently when a download completes", () => {
+    const db = database();
+    const download = db.createJob({ url: "https://f1tv.formula1.com/detail/1/mobile", quality: "best", audio: "eng" });
+    db.claimNext();
+    db.completeJob(download.id, `${download.id}/race.mp4`);
+
+    expect(db.getConversionJob(download.id)).toMatchObject({ status: "queued", progress: 0 });
+    expect(db.claimNextConversion()).toMatchObject({ downloadJobId: download.id, status: "running" });
+    expect(db.claimNext()).toBeNull();
+
+    db.updateConversionProgress(download.id, 55, "Creating 720p MP4");
+    db.completeConversion(download.id, `${download.id}/race-720p-mobile.mp4`, 2_500_000_000, false);
+    expect(db.getConversionJob(download.id)).toMatchObject({
+      status: "completed",
+      progress: 100,
+      outputSize: 2_500_000_000,
+      sourceReused: false
+    });
+    db.close();
+  });
+
+  it("recovers interrupted conversions and retries only failed work", () => {
+    const db = database();
+    const download = db.createJob({ url: "https://f1tv.formula1.com/detail/1/recovery", quality: "best", audio: "eng" });
+    db.claimNext();
+    db.completeJob(download.id, `${download.id}/race.mp4`);
+    db.claimNextConversion();
+
+    expect(db.recoverInterruptedConversions()).toBe(1);
+    expect(db.getConversionJob(download.id)).toMatchObject({ status: "queued", message: "Recovered after restart" });
+    expect(db.retryConversion(download.id)).toBe(false);
+
+    db.claimNextConversion();
+    db.failConversion(download.id, "Fixture conversion failure");
+    expect(db.retryConversion(download.id)).toBe(true);
+    expect(db.getConversionJob(download.id)).toMatchObject({ status: "queued", message: "Retry queued" });
+    db.close();
+  });
+
+  it("reconciles conversion jobs for earlier completed downloads", () => {
+    const db = database();
+    const download = db.createJob({ url: "https://f1tv.formula1.com/detail/1/legacy", quality: "best", audio: "eng" });
+    db.claimNext();
+    db.completeJob(download.id, `${download.id}/race.mp4`);
+    expect(db.ensureConversionJobs()).toEqual([]);
+    expect(db.listConversionJobs()).toHaveLength(1);
+    db.close();
+  });
+});

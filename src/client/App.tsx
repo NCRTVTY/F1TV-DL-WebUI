@@ -20,6 +20,18 @@ interface Job {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  files?: {
+    hq: { available: boolean; size: number | null; url: string };
+    lq: {
+      status: "queued" | "running" | "completed" | "failed";
+      progress: number;
+      message: string | null;
+      available: boolean;
+      size: number | null;
+      sourceReused: boolean;
+      url: string | null;
+    };
+  };
 }
 
 interface CatalogSeason { id: string; year: number; title: string; current: boolean }
@@ -90,6 +102,14 @@ function relativeTime(value: string): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value));
+}
+
+function fileSize(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "size unavailable";
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(0)} MB`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(0)} KB`;
+  return `${value} B`;
 }
 
 function Notice({ tone = "neutral", children }: { tone?: "neutral" | "error" | "success"; children: React.ReactNode }) {
@@ -368,14 +388,30 @@ function QueuePanel({ jobs, onCancel }: { jobs: Job[]; onCancel: (id: string) =>
   );
 }
 
-function DownloadsPanel({ jobs }: { jobs: Job[] }) {
+function DownloadsPanel({ jobs, onRetry }: { jobs: Job[]; onRetry: (id: string) => Promise<void> }) {
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const downloads = jobs.filter((job) => job.status === "completed" && job.outputFile);
+
+  async function retry(jobId: string) {
+    setRetrying(jobId);
+    setError("");
+    try {
+      await onRetry(jobId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not retry mobile conversion");
+    } finally {
+      setRetrying(null);
+    }
+  }
+
   return (
     <section className="panel">
       <div className="section-heading">
         <div><div className="eyebrow">MP4 library</div><h2>Ready to watch.</h2></div>
         <span className="count-chip">{downloads.length} files</span>
       </div>
+      {error && <Notice tone="error">{error}</Notice>}
       {downloads.length === 0 ? (
         <div className="empty-state"><span>MP4</span><p>Completed sessions will appear here.</p></div>
       ) : (
@@ -386,9 +422,29 @@ function DownloadsPanel({ jobs }: { jobs: Job[] }) {
               <div className="status status--completed">ready</div>
               <h3>{jobName(job)}</h3>
               <p>{job.quality === "best" ? "Best available quality" : job.quality} · {job.audio.toUpperCase()}</p>
+              {job.files?.lq.status === "running" && (
+                <div className="conversion-progress" aria-label={`Mobile conversion ${job.files.lq.progress}%`}>
+                  <div style={{ width: `${job.files.lq.progress}%` }} />
+                </div>
+              )}
+              {job.files?.lq.status !== "completed" && <p className="conversion-state">{job.files?.lq.message || "Preparing mobile MP4"}</p>}
               <div className="download-actions">
-                <a className="primary-button primary-button--small" href={`/api/downloads/${job.id}/file`}>Play</a>
-                <a className="quiet-button" href={`/api/downloads/${job.id}/file?download=1`}>Save MP4</a>
+                <a className="quiet-button" href={`/api/downloads/${job.id}/file?variant=hq&download=1`}>
+                  Download HQ · {fileSize(job.files?.hq.size)}
+                </a>
+                {job.files?.lq.available ? (
+                  <a className="primary-button primary-button--small" href={`/api/downloads/${job.id}/file?variant=lq&download=1`}>
+                    Download LQ · {fileSize(job.files.lq.size)}
+                  </a>
+                ) : job.files?.lq.status === "failed" ? (
+                  <button className="primary-button primary-button--small" disabled={retrying === job.id} onClick={() => void retry(job.id)}>
+                    {retrying === job.id ? "Retrying…" : "Retry LQ conversion"}
+                  </button>
+                ) : (
+                  <button className="primary-button primary-button--small" disabled>
+                    {job.files?.lq.status === "running" ? `Creating LQ · ${job.files.lq.progress}%` : "LQ queued"}
+                  </button>
+                )}
               </div>
             </article>
           ))}
@@ -536,6 +592,11 @@ export function App() {
     setJobs((current) => current.filter((job) => job.id !== id));
   }, []);
 
+  const retryConversion = useCallback(async (id: string) => {
+    const response = await api<{ job: Job }>(`/api/downloads/${encodeURIComponent(id)}/lq/retry`, { method: "POST" });
+    setJobs((current) => mergeJob(current, response.job));
+  }, []);
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -556,7 +617,7 @@ export function App() {
               </button>
             ))}
           </nav>
-          <div className="sidebar__foot">PORT {settings.port}<br />SINGLE WORKER</div>
+          <div className="sidebar__foot">PORT {settings.port}<br />DUAL WORKERS</div>
         </aside>
 
         <main>
@@ -566,7 +627,7 @@ export function App() {
           </div>
           {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} defaultFeed={settings.defaultFeed} jobs={jobs} onQueued={(job) => setJobs((current) => [job, ...current])} onOpenSettings={() => setTab("settings")} />}
           {tab === "queue" && <QueuePanel jobs={jobs} onCancel={cancel} />}
-          {tab === "downloads" && <DownloadsPanel jobs={jobs} />}
+          {tab === "downloads" && <DownloadsPanel jobs={jobs} onRetry={retryConversion} />}
           {tab === "settings" && <SettingsPanel settings={settings} onChanged={async () => { await Promise.all([refreshSettings(), refreshJobs()]); }} />}
         </main>
       </div>

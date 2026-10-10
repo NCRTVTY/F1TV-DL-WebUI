@@ -19,7 +19,8 @@ Current status: the application is deployed on Harlem. Its server discovers the 
 - Switch the default feed between `F1 LIVE` and `INTERNATIONAL` in Settings; queued jobs follow the selected default immediately.
 - Process one durable download at a time and recover an interrupted job after restart.
 - View progress, failures, completed downloads, and cancel queued or active work.
-- Stream or save completed MP4 files with HTTP range support.
+- Keep the original HQ MP4 and independently create or reuse an Android-compatible 720p H.264/AAC MP4 below 3 GB.
+- Download either HQ or LQ with the exact file size shown; both variants support HTTP range requests.
 - Use a responsive phone and tablet interface.
 
 The browser intentionally excludes F2/F3, highlights, shows, press conferences, documentaries, and F1 Kids. The UI never asks for a pasted session URL.
@@ -62,7 +63,9 @@ Runtime state uses two paths:
 
 `APP_ENCRYPTION_KEY` is mandatory. It must be at least 24 characters and should be stable across deployments; changing it makes previously stored credentials unreadable.
 
-The worker fails a downloader process after five minutes without output and then advances to the next queued job. Override the watchdog with `DOWNLOAD_INACTIVITY_TIMEOUT_MS` when slower storage or network conditions require a longer interval.
+The download worker and mobile-conversion worker run independently, so a new F1 TV download can proceed while FFmpeg converts the previous HQ file. On startup, the converter reconciles every completed download tracked in SQLite and creates any missing mobile version. It reuses an existing source only when FFprobe confirms a sub-3-GB, no-more-than-720p H.264/AAC MP4; otherwise it performs a size-bounded two-pass encode.
+
+Each worker fails a child process after five minutes without output. Override the watchdogs with `DOWNLOAD_INACTIVITY_TIMEOUT_MS` and `CONVERSION_INACTIVITY_TIMEOUT_MS` when slower storage or media requires longer intervals.
 
 ## Harlem deployment
 

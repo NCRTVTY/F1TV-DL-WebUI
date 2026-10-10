@@ -6,8 +6,9 @@ import fastifyStatic from "@fastify/static";
 import type { AppConfig } from "./config";
 import { CatalogService, type CalendarFetch, type CatalogFetch } from "./catalog";
 import { CredentialVault } from "./crypto";
-import { AppDatabase } from "./database";
+import { AppDatabase, type Job } from "./database";
 import { credentialsSettingKey, DownloadWorker } from "./downloader";
+import { ConversionWorker } from "./converter";
 import { fileMetadata, parseRange, resolveStoredFile } from "./files";
 import { catalogDownloadSchema, catalogRefreshSchema, credentialsSchema, defaultFeedSchema } from "./validation";
 
@@ -33,10 +34,14 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   const db = new AppDatabase(path.join(config.dataDir, "f1tv-dl-webui.sqlite"));
   const vault = new CredentialVault(config.encryptionKey);
   const worker = new DownloadWorker(db, vault, config);
+  const conversionWorker = new ConversionWorker(db, config);
   const catalog = new CatalogService(db, catalogFetch, now, calendarFetch);
   const eventStreams = new Set<PassThrough>();
 
-  if (startWorker) worker.start();
+  if (startWorker) {
+    worker.start();
+    conversionWorker.start();
+  }
 
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
@@ -56,8 +61,47 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
 
   app.addHook("onClose", async () => {
     worker.stop();
+    conversionWorker.stop();
     db.close();
   });
+
+  const presentJob = async (job: Job) => {
+    if (job.status !== "completed" || !job.outputFile) return job;
+    const conversion = db.getConversionJob(job.id);
+    let hqSize: number | null = null;
+    let lqSize: number | null = null;
+    try {
+      hqSize = (await fileMetadata(resolveStoredFile(config.downloadDir, job.outputFile))).size;
+    } catch {
+      // A missing file remains represented so the UI can report it through the file endpoint.
+    }
+    if (conversion?.status === "completed" && conversion.outputFile) {
+      try {
+        lqSize = (await fileMetadata(resolveStoredFile(config.downloadDir, conversion.outputFile))).size;
+      } catch {
+        // Startup reconciliation will rebuild or re-adopt a missing mobile file.
+      }
+    }
+    return {
+      ...job,
+      files: {
+        hq: {
+          available: hqSize !== null,
+          size: hqSize,
+          url: `/api/downloads/${encodeURIComponent(job.id)}/file?variant=hq`
+        },
+        lq: {
+          status: conversion?.status ?? "queued",
+          progress: conversion?.progress ?? 0,
+          message: conversion?.message ?? "Waiting to create mobile MP4",
+          available: conversion?.status === "completed" && lqSize !== null,
+          size: lqSize,
+          sourceReused: conversion?.sourceReused ?? false,
+          url: conversion?.status === "completed" ? `/api/downloads/${encodeURIComponent(job.id)}/file?variant=lq` : null
+        }
+      }
+    };
+  };
 
   app.setErrorHandler((error, _request, reply) => {
     const candidate = error as { statusCode?: number; message?: string };
@@ -107,12 +151,13 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
     return reply.status(204).send();
   });
 
-  app.get("/api/jobs", async () => ({ jobs: db.listJobs() }));
+  app.get("/api/jobs", async () => ({ jobs: await Promise.all(db.listJobs().map(presentJob)) }));
 
   app.get("/api/jobs/events", async (_request, reply) => {
     const stream = new PassThrough();
     const pendingJobIds = new Set<string>();
     const unsubscribe = db.onJobChanged((jobId) => pendingJobIds.add(jobId));
+    const unsubscribeConversions = db.onConversionChanged((jobId) => pendingJobIds.add(jobId));
     const flush = setInterval(() => {
       for (const jobId of pendingJobIds) {
         stream.write(`event: job-update\ndata: ${JSON.stringify({ jobId })}\n\n`);
@@ -127,6 +172,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
       closed = true;
       clearInterval(flush);
       unsubscribe();
+      unsubscribeConversions();
       eventStreams.delete(stream);
     };
     reply.raw.once("close", close);
@@ -143,7 +189,7 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   app.get<{ Params: { id: string } }>("/api/jobs/:id", async (request, reply) => {
     const job = db.getJob(request.params.id);
     if (!job) return reply.status(404).send({ error: "Download not found" });
-    return reply.send({ job });
+    return reply.send({ job: await presentJob(job) });
   });
 
   const catalogError = (reply: FastifyReply, error: unknown) => {
@@ -229,16 +275,35 @@ export async function buildApp({ config, startWorker = true, catalogFetch, calen
   });
 
   app.get("/api/downloads", async () => ({
-    downloads: db.listJobs().filter((job) => job.status === "completed" && job.outputFile)
+    downloads: await Promise.all(db.listJobs().filter((job) => job.status === "completed" && job.outputFile).map(presentJob))
   }));
 
-  app.get<{ Params: { id: string }; Querystring: { download?: string } }>("/api/downloads/:id/file", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/downloads/:id/lq/retry", async (request, reply) => {
+    const job = db.getJob(request.params.id);
+    if (!job?.outputFile || job.status !== "completed") return reply.status(404).send({ error: "Completed download not found" });
+    if (!db.retryConversion(job.id)) return reply.status(409).send({ error: "Mobile conversion is not failed" });
+    if (startWorker) conversionWorker.wake();
+    return reply.send({ job: await presentJob(job) });
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { download?: string; variant?: string } }>("/api/downloads/:id/file", async (request, reply) => {
     const job = db.getJob(request.params.id);
     if (!job?.outputFile || job.status !== "completed") {
       return reply.status(404).send({ error: "Completed download not found" });
     }
 
-    const filename = resolveStoredFile(config.downloadDir, job.outputFile);
+    const variant = request.query.variant ?? "hq";
+    if (variant !== "hq" && variant !== "lq") return reply.status(400).send({ error: "Choose either the HQ or LQ download" });
+    let relativeFile = job.outputFile;
+    if (variant === "lq") {
+      const conversion = db.getConversionJob(job.id);
+      if (conversion?.status !== "completed" || !conversion.outputFile) {
+        return reply.status(404).send({ error: "Mobile download is not ready" });
+      }
+      relativeFile = conversion.outputFile;
+    }
+
+    const filename = resolveStoredFile(config.downloadDir, relativeFile);
     let metadata: Awaited<ReturnType<typeof fileMetadata>>;
     try {
       metadata = await fileMetadata(filename);

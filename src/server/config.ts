@@ -9,8 +9,12 @@ export interface AppConfig {
   encryptionKey?: string;
   commit: string;
   f1tvBin: string;
+  ffmpegBin: string;
+  ffprobeBin: string;
   workerPollMs: number;
   downloadInactivityTimeoutMs: number;
+  conversionPollMs: number;
+  conversionInactivityTimeoutMs: number;
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {
@@ -29,8 +33,12 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     encryptionKey: process.env.APP_ENCRYPTION_KEY || undefined,
     commit: process.env.DRONE_COMMIT || "development",
     f1tvBin: path.resolve(process.env.F1TV_DL_BIN || path.join(root, "node_modules", ".bin", "f1tv-dl")),
+    ffmpegBin: process.env.FFMPEG_BIN || "ffmpeg",
+    ffprobeBin: process.env.FFPROBE_BIN || "ffprobe",
     workerPollMs: positiveInteger(process.env.WORKER_POLL_MS, 1000),
     downloadInactivityTimeoutMs: positiveInteger(process.env.DOWNLOAD_INACTIVITY_TIMEOUT_MS, 300000),
+    conversionPollMs: positiveInteger(process.env.CONVERSION_POLL_MS, 1000),
+    conversionInactivityTimeoutMs: positiveInteger(process.env.CONVERSION_INACTIVITY_TIMEOUT_MS, 300000),
     ...overrides
   };
 }

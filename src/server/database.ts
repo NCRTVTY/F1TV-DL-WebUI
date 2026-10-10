@@ -23,6 +23,7 @@ export interface CreateJobInput {
 }
 
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type ConversionStatus = "queued" | "running" | "completed" | "failed";
 
 export interface Job {
   id: string;
@@ -58,6 +59,45 @@ interface JobRow {
   finished_at: string | null;
 }
 
+export interface ConversionJob {
+  downloadJobId: string;
+  status: ConversionStatus;
+  progress: number;
+  message: string | null;
+  outputFile: string | null;
+  outputSize: number | null;
+  sourceReused: boolean;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+interface ConversionJobRow {
+  download_job_id: string;
+  status: ConversionStatus;
+  progress: number;
+  message: string | null;
+  output_file: string | null;
+  output_size: number | null;
+  source_reused: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+const toConversionJob = (row: ConversionJobRow): ConversionJob => ({
+  downloadJobId: row.download_job_id,
+  status: row.status,
+  progress: row.progress,
+  message: row.message,
+  outputFile: row.output_file,
+  outputSize: row.output_size,
+  sourceReused: row.source_reused === 1,
+  createdAt: row.created_at,
+  startedAt: row.started_at,
+  finishedAt: row.finished_at
+});
+
 const toJob = (row: JobRow): Job => ({
   id: row.id,
   url: row.url,
@@ -78,6 +118,7 @@ const toJob = (row: JobRow): Job => ({
 export class AppDatabase {
   private readonly db: Database.Database;
   private readonly jobChangeListeners = new Set<(jobId: string) => void>();
+  private readonly conversionChangeListeners = new Set<(jobId: string) => void>();
 
   constructor(filename: string) {
     fs.mkdirSync(path.dirname(filename), { recursive: true });
@@ -113,6 +154,21 @@ export class AppDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS jobs_status_created_idx ON jobs(status, created_at);
+
+      CREATE TABLE IF NOT EXISTS conversion_jobs (
+        download_job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+        status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+        progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
+        message TEXT,
+        output_file TEXT,
+        output_size INTEGER,
+        source_reused INTEGER NOT NULL DEFAULT 0 CHECK(source_reused IN (0, 1)),
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS conversion_jobs_status_created_idx ON conversion_jobs(status, created_at);
     `);
     const columns = new Set((this.db.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>).map((column) => column.name));
     if (!columns.has("content_id")) this.db.exec("ALTER TABLE jobs ADD COLUMN content_id TEXT");
@@ -138,6 +194,7 @@ export class AppDatabase {
 
   close(): void {
     this.jobChangeListeners.clear();
+    this.conversionChangeListeners.clear();
     this.db.close();
   }
 
@@ -148,6 +205,15 @@ export class AppDatabase {
 
   private notifyJobChanged(jobId: string): void {
     for (const listener of this.jobChangeListeners) listener(jobId);
+  }
+
+  onConversionChanged(listener: (jobId: string) => void): () => void {
+    this.conversionChangeListeners.add(listener);
+    return () => this.conversionChangeListeners.delete(listener);
+  }
+
+  private notifyConversionChanged(jobId: string): void {
+    for (const listener of this.conversionChangeListeners) listener(jobId);
   }
 
   getSetting(key: string): string | null {
@@ -270,11 +336,24 @@ export class AppDatabase {
   }
 
   completeJob(id: string, outputFile: string): void {
-    const result = this.db.prepare(`
-      UPDATE jobs SET status = 'completed', progress = 100, message = 'Download complete', output_file = ?, finished_at = ?
-      WHERE id = ? AND status = 'running'
-    `).run(outputFile, new Date().toISOString(), id);
-    if (result.changes === 1) this.notifyJobChanged(id);
+    const complete = this.db.transaction(() => {
+      const now = new Date().toISOString();
+      const result = this.db.prepare(`
+        UPDATE jobs SET status = 'completed', progress = 100, message = 'Download complete', output_file = ?, finished_at = ?
+        WHERE id = ? AND status = 'running'
+      `).run(outputFile, now, id);
+      if (result.changes !== 1) return false;
+      this.db.prepare(`
+        INSERT OR IGNORE INTO conversion_jobs
+          (download_job_id, status, progress, message, output_file, output_size, source_reused, created_at, started_at, finished_at)
+        VALUES (?, 'queued', 0, 'Waiting to create mobile MP4', NULL, NULL, 0, ?, NULL, NULL)
+      `).run(id, now);
+      return true;
+    });
+    if (complete()) {
+      this.notifyJobChanged(id);
+      this.notifyConversionChanged(id);
+    }
   }
 
   failJob(id: string, message: string): void {
@@ -299,5 +378,117 @@ export class AppDatabase {
     const rows = this.db.prepare("SELECT status, COUNT(*) AS count FROM jobs GROUP BY status").all() as Array<{ status: JobStatus; count: number }>;
     for (const row of rows) counts[row.status] = row.count;
     return counts;
+  }
+
+  ensureConversionJobs(): string[] {
+    const missing = this.db.prepare(`
+      SELECT jobs.id FROM jobs
+      LEFT JOIN conversion_jobs ON conversion_jobs.download_job_id = jobs.id
+      WHERE jobs.status = 'completed' AND jobs.output_file IS NOT NULL AND conversion_jobs.download_job_id IS NULL
+      ORDER BY jobs.finished_at ASC
+    `).all() as Array<{ id: string }>;
+    if (missing.length === 0) return [];
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO conversion_jobs
+        (download_job_id, status, progress, message, output_file, output_size, source_reused, created_at, started_at, finished_at)
+      VALUES (?, 'queued', 0, 'Waiting to create mobile MP4', NULL, NULL, 0, ?, NULL, NULL)
+    `);
+    const add = this.db.transaction(() => {
+      const now = new Date().toISOString();
+      for (const job of missing) insert.run(job.id, now);
+    });
+    add();
+    for (const job of missing) this.notifyConversionChanged(job.id);
+    return missing.map((job) => job.id);
+  }
+
+  listConversionJobs(): ConversionJob[] {
+    const rows = this.db.prepare("SELECT * FROM conversion_jobs ORDER BY created_at ASC").all() as ConversionJobRow[];
+    return rows.map(toConversionJob);
+  }
+
+  getConversionJob(downloadJobId: string): ConversionJob | null {
+    const row = this.db.prepare("SELECT * FROM conversion_jobs WHERE download_job_id = ?").get(downloadJobId) as ConversionJobRow | undefined;
+    return row ? toConversionJob(row) : null;
+  }
+
+  recoverInterruptedConversions(): number {
+    const interrupted = this.db.prepare("SELECT download_job_id FROM conversion_jobs WHERE status = 'running'").all() as Array<{ download_job_id: string }>;
+    const result = this.db.prepare(`
+      UPDATE conversion_jobs
+      SET status = 'queued', progress = 0, message = 'Recovered after restart', started_at = NULL, finished_at = NULL
+      WHERE status = 'running'
+    `).run();
+    for (const job of interrupted) this.notifyConversionChanged(job.download_job_id);
+    return result.changes;
+  }
+
+  claimNextConversion(): ConversionJob | null {
+    const claim = this.db.transaction(() => {
+      const row = this.db.prepare(`
+        SELECT conversion_jobs.download_job_id
+        FROM conversion_jobs
+        JOIN jobs ON jobs.id = conversion_jobs.download_job_id
+        WHERE conversion_jobs.status = 'queued' AND jobs.status = 'completed' AND jobs.output_file IS NOT NULL
+        ORDER BY conversion_jobs.created_at ASC LIMIT 1
+      `).get() as { download_job_id: string } | undefined;
+      if (!row) return null;
+      const result = this.db.prepare(`
+        UPDATE conversion_jobs
+        SET status = 'running', progress = 0, message = 'Inspecting HQ file', started_at = ?, finished_at = NULL
+        WHERE download_job_id = ? AND status = 'queued'
+      `).run(new Date().toISOString(), row.download_job_id);
+      return result.changes === 1 ? this.getConversionJob(row.download_job_id) : null;
+    });
+    const job = claim();
+    if (job) this.notifyConversionChanged(job.downloadJobId);
+    return job;
+  }
+
+  updateConversionProgress(downloadJobId: string, progress: number, message: string): void {
+    const result = this.db.prepare(`
+      UPDATE conversion_jobs SET progress = ?, message = ?
+      WHERE download_job_id = ? AND status = 'running'
+    `).run(Math.max(0, Math.min(99, Math.floor(progress))), message.slice(0, 500), downloadJobId);
+    if (result.changes === 1) this.notifyConversionChanged(downloadJobId);
+  }
+
+  completeConversion(downloadJobId: string, outputFile: string, outputSize: number, sourceReused: boolean): void {
+    const result = this.db.prepare(`
+      UPDATE conversion_jobs
+      SET status = 'completed', progress = 100, message = ?, output_file = ?, output_size = ?, source_reused = ?, finished_at = ?
+      WHERE download_job_id = ?
+    `).run(sourceReused ? "HQ file is already mobile-ready" : "Mobile MP4 ready", outputFile, outputSize, sourceReused ? 1 : 0, new Date().toISOString(), downloadJobId);
+    if (result.changes === 1) this.notifyConversionChanged(downloadJobId);
+  }
+
+  failConversion(downloadJobId: string, message: string): void {
+    const result = this.db.prepare(`
+      UPDATE conversion_jobs SET status = 'failed', message = ?, finished_at = ?
+      WHERE download_job_id = ? AND status = 'running'
+    `).run(message.slice(0, 500), new Date().toISOString(), downloadJobId);
+    if (result.changes === 1) this.notifyConversionChanged(downloadJobId);
+  }
+
+  requeueConversion(downloadJobId: string, message = "Waiting to create mobile MP4"): boolean {
+    const result = this.db.prepare(`
+      UPDATE conversion_jobs
+      SET status = 'queued', progress = 0, message = ?, output_file = NULL, output_size = NULL,
+          source_reused = 0, started_at = NULL, finished_at = NULL
+      WHERE download_job_id = ? AND status IN ('failed', 'completed')
+    `).run(message.slice(0, 500), downloadJobId);
+    if (result.changes === 1) this.notifyConversionChanged(downloadJobId);
+    return result.changes === 1;
+  }
+
+  retryConversion(downloadJobId: string): boolean {
+    const result = this.db.prepare(`
+      UPDATE conversion_jobs
+      SET status = 'queued', progress = 0, message = 'Retry queued', output_file = NULL, output_size = NULL,
+          source_reused = 0, started_at = NULL, finished_at = NULL
+      WHERE download_job_id = ? AND status = 'failed'
+    `).run(downloadJobId);
+    if (result.changes === 1) this.notifyConversionChanged(downloadJobId);
+    return result.changes === 1;
   }
 }
