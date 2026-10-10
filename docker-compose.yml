@@ -1,0 +1,38 @@
+name: f1tv-dl-webui
+
+services:
+  app:
+    image: ${REGISTRY:-docker-registry.nc:17788}/f1tv-dl-webui:${TAG:-latest}
+    container_name: f1tv-dl-webui
+    ports:
+      - "43729:43729"
+    environment:
+      TZ: Europe/Brussels
+      HOST: 0.0.0.0
+      PORT: "43729"
+      DATA_DIR: /app/data
+      DOWNLOAD_DIR: /app/downloads
+      DRONE_COMMIT: ${TAG:-development}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY is required}
+    volumes:
+      - /home/ronny/docker/f1tv-dl-webui/data:/app/data
+      - /home/ronny/docker/f1tv-dl-webui/downloads:/app/downloads
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    shm_size: 512mb
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:43729/api/health').then(async response=>{const body=await response.json();if(!response.ok||!body.ok||body.commit!==process.env.DRONE_COMMIT||!body.storage.writable)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s

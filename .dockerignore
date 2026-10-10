@@ -1,0 +1,13 @@
+.git
+.gitignore
+SECRETS
+node_modules
+dist
+coverage
+data
+downloads
+.env
+docs
+tests
+*.sqlite*
+npm-debug.log*

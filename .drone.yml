@@ -1,0 +1,85 @@
+kind: pipeline
+type: docker
+name: F1TV-DL WebUI production
+
+node:
+  target: harlem
+
+platform:
+  os: linux
+  arch: amd64
+
+trigger:
+  branch:
+    - main
+  event:
+    - push
+    - custom
+
+volumes:
+  - name: docker-sock
+    host:
+      path: /var/run/docker.sock
+
+steps:
+  - name: verify repository
+    image: node:22-bookworm-slim
+    environment:
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+    commands:
+      - npm ci --no-audit --no-fund
+      - npm run verify
+
+  - name: build and push image
+    image: docker:cli
+    volumes:
+      - name: docker-sock
+        path: /var/run/docker.sock
+    environment:
+      REGISTRY: docker-registry.nc:17788
+      IMAGE_NAME: f1tv-dl-webui
+    commands:
+      - docker build --pull --build-arg DRONE_COMMIT=$DRONE_COMMIT -t $REGISTRY/$IMAGE_NAME:$DRONE_COMMIT .
+      - docker push $REGISTRY/$IMAGE_NAME:$DRONE_COMMIT
+    depends_on:
+      - verify repository
+
+  - name: deploy on harlem
+    image: docker:cli
+    volumes:
+      - name: docker-sock
+        path: /var/run/docker.sock
+    environment:
+      REGISTRY: docker-registry.nc:17788
+      TAG: ${DRONE_COMMIT}
+      COMPOSE_PROJECT_NAME: f1tv-dl-webui
+      APP_ENCRYPTION_KEY:
+        from_secret: F1TV_DL_WEBUI_ENCRYPTION_KEY
+    commands:
+      - docker compose -f ./docker-compose.yml config -q
+      - docker run --rm -v /home/ronny/docker/f1tv-dl-webui:/state alpine:3.21 sh -eu -c "mkdir -p /state/data/f1tv-home /state/downloads && chown -R 1000:1000 /state/data /state/downloads"
+      - docker compose -f ./docker-compose.yml pull
+      - docker compose -f ./docker-compose.yml up -d --remove-orphans
+      - |
+        attempts=0
+        until docker exec f1tv-dl-webui node -e "fetch('http://127.0.0.1:43729/api/health').then(async response=>{const body=await response.json();if(!response.ok||!body.ok||body.commit!=='$DRONE_COMMIT'||!body.storage.writable)process.exit(1)}).catch(()=>process.exit(1))"; do
+          attempts=$((attempts + 1))
+          if [ "$attempts" -ge 60 ]; then
+            docker compose -f ./docker-compose.yml logs --tail=200 app
+            exit 1
+          fi
+          sleep 2
+        done
+      - docker compose -f ./docker-compose.yml ps
+    depends_on:
+      - build and push image
+
+  - name: cleanup old images
+    image: docker:cli
+    volumes:
+      - name: docker-sock
+        path: /var/run/docker.sock
+    commands:
+      - docker image prune -f
+    depends_on:
+      - deploy on harlem
