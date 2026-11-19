@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-quality=""
+mode="${1##*/}"
 output_directory=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -19,18 +19,18 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ "$quality" = "silent" ]; then
+if [ "$mode" = "silent" ]; then
   sleep 30
 fi
 
-if [ "$quality" = "cancel" ]; then
+if [ "$mode" = "cancel" ]; then
   mkdir -p "$output_directory"
   printf 'partial fixture media' > "$output_directory/partial.mp4"
   echo "Percent Complete=12%"
   sleep 30
 fi
 
-if [ "$quality" = "chatty" ]; then
+if [ "$mode" = "chatty" ]; then
   count=0
   while [ "$count" -lt 5 ]; do
     echo "working"

@@ -32,6 +32,7 @@ WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY scripts/reset-library.cjs ./scripts/reset-library.cjs
 
 RUN mkdir -p /app/data/f1tv-home /app/downloads \
     && chown -R node:node /app/data /app/downloads
@@ -39,7 +40,7 @@ RUN mkdir -p /app/data/f1tv-home /app/downloads \
 USER node
 EXPOSE 43729
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
+HEALTHCHECK --interval=15s --timeout=8s --start-period=20s --retries=4 \
   CMD node -e "fetch('http://127.0.0.1:43729/api/health').then(async response=>{const body=await response.json();if(!response.ok||!body.ok||body.commit!==process.env.DRONE_COMMIT||!body.storage.writable)process.exit(1)}).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

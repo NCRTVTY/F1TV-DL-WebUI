@@ -1,781 +1,1637 @@
-import { FormEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type FormEvent,
+} from "react";
+import {
+  Compass,
+  ListOrdered,
+  Download,
+  Settings as SettingsIcon,
+  Search,
+  RefreshCw,
+  Play,
+  Trash2,
+  ArrowUp,
+  ArrowRight,
+  Inbox,
+  WifiOff,
+  CalendarDays,
+} from "lucide-react";
 import { api } from "./api";
+import type {
+  Screen,
+  Season,
+  Event,
+  Session,
+  Catalog,
+  Job,
+  Settings,
+} from "./types";
+import racePhoto from "./assets/race.jpg";
 
-type Tab = "sessions" | "queue" | "downloads" | "settings";
-type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
-type DownloadFeed = "F1 LIVE" | "INTERNATIONAL";
-
-interface Job {
-  id: string;
-  url: string;
-  quality: string;
-  audio: string;
-  channel: string | null;
-  contentId: string | null;
-  title: string | null;
-  status: JobStatus;
-  progress: number;
-  message: string | null;
-  outputFile: string | null;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  files?: {
-    hq: { available: boolean; size: number | null; url: string };
-    lq: {
-      status: "queued" | "running" | "completed" | "failed";
-      progress: number;
-      message: string | null;
-      available: boolean;
-      size: number | null;
-      sourceReused: boolean;
-      url: string | null;
-    };
-  };
+const navItems = [
+  { id: "browse", label: "Browse", Icon: Compass },
+  { id: "queue", label: "Queue", Icon: ListOrdered },
+  { id: "downloads", label: "Downloads", Icon: Download },
+  { id: "settings", label: "Settings", Icon: SettingsIcon },
+] as const;
+function screenFromUrl(): Screen {
+  const v = new URLSearchParams(location.search).get("view");
+  return [
+    "browse",
+    "weekend",
+    "queue",
+    "downloads",
+    "watch",
+    "settings",
+  ].includes(v ?? "")
+    ? (v as Screen)
+    : "browse";
 }
-
-interface CatalogSeason { id: string; year: number; title: string; current: boolean }
-interface CatalogEvent {
-  id: string; seasonId: string; season: number; round: number | null; title: string; country: string | null;
-  startDate: string | null; endDate: string | null; complete: boolean; status: "completed" | "current" | "future";
-  replayAvailable: boolean; thumbnailUrl: string | null;
+export function fileSize(bytes: number | null | undefined): string {
+  return bytes == null
+    ? "Size unavailable"
+    : bytes >= 1e12
+      ? (bytes / 1e12).toFixed(1) + " TB"
+      : bytes >= 1e9
+        ? (bytes / 1e9).toFixed(2) + " GB"
+        : (bytes / 1e6).toFixed(0) + " MB";
 }
-interface CatalogSession {
-  id: string; eventId: string; title: string; type: string; startDate: string | null; endDate: string | null;
-  durationSeconds: number | null; durationLabel: string | null; thumbnailUrl: string | null; available: boolean;
+function duration(seconds: number | null | undefined): string {
+  if (!seconds) return "";
+  const h = Math.floor(seconds / 3600),
+    m = Math.round((seconds % 3600) / 60);
+  return (h ? h + "h " : "") + m + "m";
 }
-interface CatalogResult<T> { data: T; refreshedAt: string; stale: boolean; warning?: string }
-
-interface Settings {
-  credentialsConfigured: boolean;
-  encryptionReady: boolean;
-  port: number;
-  defaultFeed: DownloadFeed;
+function name(event: Event): string {
+  const t = event.title.toLowerCase();
+  for (const [pattern, label] of [
+    [/las vegas/, "Las Vegas"],
+    [/miami/, "Miami"],
+    [/united states|austin/, "Austin"],
+    [/são paulo|brazil|brasil/, "São Paulo"],
+    [/mexic/, "Mexico City"],
+    [/singapore/, "Singapore"],
+    [/madrid/, "Madrid"],
+    [/barcelona/, "Barcelona"],
+  ] as const)
+    if (pattern.test(t)) return label;
+  return (event.country || event.title)
+    .toLowerCase()
+    .replace(/\b\p{L}/gu, (c) => c.toUpperCase());
 }
-
-const navigation: Array<{ id: Tab; label: string; marker: string }> = [
-  { id: "sessions", label: "Sessions", marker: "01" },
-  { id: "queue", label: "Queue", marker: "02" },
-  { id: "downloads", label: "Downloads", marker: "03" },
-  { id: "settings", label: "Settings", marker: "04" }
-];
-
-function sessionName(url: string): string {
-  try {
-    const slug = new URL(url).pathname.split("/").filter(Boolean).at(-1) || "F1 TV session";
-    return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
-  } catch {
-    return "F1 TV session";
-  }
-}
-
-function jobName(job: Job): string {
-  return job.title || sessionName(job.url);
-}
-
-function mergeJob(jobs: Job[], job: Job): Job[] {
-  const index = jobs.findIndex((candidate) => candidate.id === job.id);
-  if (index === -1) return [job, ...jobs];
-  if (jobs[index] === job) return jobs;
-  const next = [...jobs];
-  next[index] = job;
-  return next;
-}
-
-function displayDate(value: string | null): string {
-  if (!value) return "Date unavailable";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function eventDate(event: CatalogEvent): string {
+function dateRange(event: Event): string {
   if (!event.startDate) return "Date unavailable";
-  const start = new Date(event.startDate);
-  const end = event.endDate ? new Date(event.endDate) : start;
-  const formatMonth = (date: Date) => new Intl.DateTimeFormat(undefined, { month: "short" }).format(date);
-  if (start.getMonth() === end.getMonth()) return `${start.getDate()}–${end.getDate()} ${formatMonth(end)}`;
-  return `${start.getDate()} ${formatMonth(start)}–${end.getDate()} ${formatMonth(end)}`;
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(new Date(event.startDate));
 }
-
-function relativeTime(value: string): string {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value));
-}
-
-function fileSize(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "size unavailable";
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(0)} MB`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(0)} KB`;
-  return `${value} B`;
-}
-
-function Notice({ tone = "neutral", children }: { tone?: "neutral" | "error" | "success"; children: React.ReactNode }) {
-  return <div className={`notice notice--${tone}`} role={tone === "error" ? "alert" : "status"}>{children}</div>;
-}
-
-function SessionPanel({ configured, defaultFeed, jobs, onQueued, onOpenSettings }: {
-  configured: boolean;
-  defaultFeed: DownloadFeed;
-  jobs: Job[];
-  onQueued: (job: Job) => void;
-  onOpenSettings: () => void;
+function Picture({
+  src,
+  className = "",
+  alt = "",
+}: {
+  src?: string | null;
+  className?: string;
+  alt?: string;
 }) {
-  const [seasons, setSeasons] = useState<CatalogSeason[]>([]);
-  const [events, setEvents] = useState<CatalogEvent[]>([]);
-  const [sessions, setSessions] = useState<CatalogSession[]>([]);
-  const [seasonId, setSeasonId] = useState("");
-  const [eventId, setEventId] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [queueing, setQueueing] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [warning, setWarning] = useState("");
-  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
-
-  const loadSeasons = useCallback(async () => {
-    const result = await api<CatalogResult<CatalogSeason[]>>("/api/catalog/seasons");
-    setSeasons(result.data);
-    setWarning(result.warning || "");
-    setRefreshedAt(result.refreshedAt);
-    setSeasonId((current) => current || result.data.find((season) => season.current)?.id || result.data[0]?.id || "");
-  }, []);
-
-  const loadEvents = useCallback(async (nextSeasonId: string) => {
-    const result = await api<CatalogResult<CatalogEvent[]>>(`/api/catalog/seasons/${nextSeasonId}/events`);
-    setEvents(result.data);
-    setWarning(result.warning || "");
-    setRefreshedAt(result.refreshedAt);
-    setEventId((current) => {
-      if (result.data.some((event) => event.id === current && event.replayAvailable && event.status !== "future")) return current;
-      const ongoing = result.data.find((event) => event.status === "current" && event.replayAvailable);
-      const completed = result.data.filter((event) => event.status === "completed" && event.replayAvailable);
-      return ongoing?.id || completed.at(-1)?.id || "";
-    });
-  }, []);
-
-  const loadSessions = useCallback(async (nextEventId: string) => {
-    const result = await api<CatalogResult<CatalogSession[]>>(`/api/catalog/events/${nextEventId}/sessions`);
-    setSessions(result.data);
-    setWarning(result.warning || "");
-    setRefreshedAt(result.refreshedAt);
-  }, []);
-
+  return (
+    <img
+      className={"fd-photo " + className}
+      src={src || racePhoto}
+      alt={alt}
+      loading="lazy"
+      onError={(e) => {
+        e.currentTarget.onerror = null;
+        e.currentTarget.src = racePhoto;
+      }}
+    />
+  );
+}
+function Button({
+  children,
+  onClick,
+  disabled = false,
+  primary = false,
+  label,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={"fd-button " + (primary ? "fd-button-primary" : "")}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+    >
+      {children}
+    </button>
+  );
+}
+function Empty({
+  title,
+  children,
+  onBrowse,
+  label = "Browse replays",
+  icon = <Inbox />,
+}: {
+  title: string;
+  children: ReactNode;
+  onBrowse: () => void;
+  label?: string;
+  icon?: ReactNode;
+}) {
+  return (
+    <div className="fd-empty">
+      {icon}
+      <h2>{title}</h2>
+      <p>{children}</p>
+      <Button onClick={onBrowse} primary>
+        {label}
+      </Button>
+    </div>
+  );
+}
+function Heading({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="fd-page-title">
+      <div>
+        <h1>{title}</h1>
+        {subtitle && (
+          <p className="fd-muted fd-small" style={{ marginTop: 6 }}>
+            {subtitle}
+          </p>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
+function Modal({
+  title,
+  children,
+  busy,
+  onClose,
+  onConfirm,
+  label,
+  error,
+}: {
+  title: string;
+  children: ReactNode;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  label: string;
+  error: string;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
+    ref.current?.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="fd-dialog"
+      aria-labelledby="dialog-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        if (!busy) onClose();
+      }}
+    >
+      <h2 id="dialog-title">{title}</h2>
+      {children}
+      {error && <p role="alert">{error}</p>}
+      <div className="fd-dialog-actions">
+        <Button disabled={busy} onClick={onClose}>
+          Keep it
+        </Button>
+        <Button disabled={busy} onClick={onConfirm} primary>
+          {busy ? "Working…" : label}
+        </Button>
+      </div>
+    </dialog>
+  );
+}
+const initialSettings: Settings = {
+  credentialsConfigured: false,
+  encryptionReady: false,
+  paused: false,
+  storage: {
+    ready: false,
+    writable: false,
+    freeBytes: 0,
+    totalBytes: 0,
+    enoughSpace: false,
+    message: "Checking media storage",
+    location: "Synology / Homelab-workspace / f1tv-dl",
+  },
+};
+export function App() {
+  const initial = new URLSearchParams(location.search);
+  const [screen, setScreen] = useState<Screen>(screenFromUrl);
+  const [seasonId, setSeasonId] = useState(initial.get("season") ?? "");
+  const [eventId, setEventId] = useState(initial.get("event") ?? "");
+  const [watchId, setWatchId] = useState(initial.get("job") ?? "");
+  const [seasons, setSeasons] = useState<Season[]>([]),
+    [events, setEvents] = useState<Event[]>([]),
+    [sessions, setSessions] = useState<Session[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]),
+    [settings, setSettings] = useState<Settings>(initialSettings);
+  const [online, setOnline] = useState(true),
+    [loading, setLoading] = useState(true),
+    [sessionLoading, setSessionLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState(""),
+    [sessionError, setSessionError] = useState(""),
+    [warning, setWarning] = useState(""),
+    [error, setError] = useState(""),
+    [toast, setToast] = useState("");
+  const [search, setSearch] = useState(""),
+    [availability, setAvailability] = useState("all"),
+    [sessionType, setSessionType] = useState("All"),
+    [librarySearch, setLibrarySearch] = useState("");
+  const [refresh, setRefresh] = useState(0),
+    [busy, setBusy] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<{
+      kind: "cancel" | "remove" | "account";
+      job?: Job;
+    } | null>(null),
+    [dialogError, setDialogError] = useState("");
+  const [editing, setEditing] = useState(false),
+    [username, setUsername] = useState(""),
+    [password, setPassword] = useState("");
+  const versions = useRef(new Map<string, number>());
+  const settingsLoaded = useRef(false);
+  const syncSettings = useCallback(async () => {
+    const v = await api<Settings>("/api/settings");
+    setSettings(v);
+    settingsLoaded.current = true;
+  }, []);
+  const syncJobs = useCallback(async () => {
+    const v = await api<{ jobs: Job[] }>("/api/jobs");
+    setJobs(v.jobs);
+  }, []);
+  const sync = useCallback(() => {
+    void Promise.all([syncSettings(), syncJobs()])
+      .then(() => setOnline(true))
+      .catch(() => setOnline(false));
+  }, [syncSettings, syncJobs]);
+  useEffect(() => {
+    sync();
+    const stream = new EventSource("/api/jobs/events");
+    stream.onopen = () => {
+      setOnline(true);
+      sync();
+    };
+    stream.onerror = () => setOnline(false);
+    stream.addEventListener("job-update", (event) => {
+      let id: string;
+      try {
+        id = JSON.parse((event as MessageEvent).data).jobId;
+        if (typeof id !== "string") return;
+      } catch {
+        return;
+      }
+      const v = (versions.current.get(id) ?? 0) + 1;
+      versions.current.set(id, v);
+      void api<{ job: Job }>("/api/jobs/" + encodeURIComponent(id))
+        .then(({ job }) => {
+          if (versions.current.get(id) === v)
+            setJobs((current) =>
+              [job, ...current.filter((j) => j.id !== id)].sort((a, b) =>
+                b.createdAt.localeCompare(a.createdAt),
+              ),
+            );
+        })
+        .catch(() => {});
+    });
+    stream.addEventListener("job-removed", (event) => {
+      try {
+        const id = JSON.parse((event as MessageEvent).data).jobId;
+        versions.current.set(id, (versions.current.get(id) ?? 0) + 1);
+        setJobs((current) => current.filter((j) => j.id !== id));
+      } catch {}
+    });
+    const timer = setInterval(sync, 15000);
+    const visible = () => {
+      if (document.visibilityState === "visible") sync();
+    };
+    document.addEventListener("visibilitychange", visible);
+    window.addEventListener("online", sync);
+    return () => {
+      stream.close();
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+      window.removeEventListener("online", sync);
+    };
+  }, [sync]);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
+  useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
-    void loadSeasons().catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load F1TV seasons")).finally(() => setLoading(false));
-  }, [loadSeasons]);
-
+    setCatalogError("");
+    const request = refresh
+      ? api<Catalog<Season[]>>("/api/catalog/refresh", {
+          method: "POST",
+          body: JSON.stringify({ scope: "seasons" }),
+          signal: controller.signal,
+        })
+      : api<Catalog<Season[]>>("/api/catalog/seasons", {
+          signal: controller.signal,
+        });
+    void request
+      .then((r) => {
+        setSeasons(r.data);
+        setWarning(r.warning ?? "");
+        setSeasonId((current) =>
+          r.data.some((s) => s.id === current)
+            ? current
+            : (r.data.find((s) => s.current)?.id ?? r.data[0]?.id ?? ""),
+        );
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setCatalogError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [refresh]);
   useEffect(() => {
     if (!seasonId) return;
-    setLoading(true); setError(""); setEventId(""); setSessions([]);
-    void loadEvents(seasonId).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load F1 events")).finally(() => setLoading(false));
-  }, [loadEvents, seasonId]);
-
-  useEffect(() => {
-    if (!eventId) return;
-    setLoading(true); setError(""); setSessions([]);
-    void loadSessions(eventId).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load F1 sessions")).finally(() => setLoading(false));
-  }, [eventId, loadSessions]);
-
-  async function refresh() {
-    setRefreshing(true); setError("");
-    try {
-      const seasonResult = await api<CatalogResult<CatalogSeason[]>>("/api/catalog/refresh", { method: "POST", body: JSON.stringify({ scope: "seasons" }) });
-      setSeasons(seasonResult.data);
-      if (seasonId) {
-        const eventResult = await api<CatalogResult<CatalogEvent[]>>("/api/catalog/refresh", { method: "POST", body: JSON.stringify({ scope: "events", id: seasonId }) });
-        setEvents(eventResult.data);
-      }
-      if (eventId) {
-        const sessionResult = await api<CatalogResult<CatalogSession[]>>("/api/catalog/refresh", { method: "POST", body: JSON.stringify({ scope: "sessions", id: eventId }) });
-        setSessions(sessionResult.data);
-        setWarning(sessionResult.warning || "");
-        setRefreshedAt(sessionResult.refreshedAt);
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not refresh the F1TV catalog");
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
-  async function queue(session: CatalogSession) {
-    setQueueing(session.id); setError("");
-    try {
-      const { job } = await api<{ job: Job }>(`/api/catalog/sessions/${session.id}/download`, {
-        method: "POST",
-        body: JSON.stringify({ eventId: session.eventId })
+    const controller = new AbortController();
+    setLoading(true);
+    setCatalogError("");
+    setEvents([]);
+    const request = refresh
+      ? api<Catalog<Event[]>>("/api/catalog/refresh", {
+          method: "POST",
+          body: JSON.stringify({ scope: "events", id: seasonId }),
+          signal: controller.signal,
+        })
+      : api<Catalog<Event[]>>("/api/catalog/seasons/" + seasonId + "/events", {
+          signal: controller.signal,
+        });
+    void request
+      .then((r) => {
+        setEvents(r.data);
+        setWarning(r.warning ?? "");
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setCatalogError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
       });
-      onQueued(job);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not queue the session");
-    } finally {
-      setQueueing(null);
-    }
-  }
-
-  return (
-    <section className="panel session-panel">
-      <div className="catalog-toolbar">
-        <div><div className="eyebrow">F1TV catalog</div><h2>Choose a race weekend.</h2></div>
-        <button className="quiet-button" disabled={refreshing} onClick={() => void refresh()}>{refreshing ? "Refreshing…" : "Refresh"}</button>
-      </div>
-      <p className="lede">Browse official Formula 1 replays and create an MP4 with one click. Downloads use best quality, English audio, and the {defaultFeed} feed.</p>
-
-      {!configured && (
-        <Notice tone="neutral">
-          <span>F1 TV credentials are not configured yet.</span>
-          <button className="link-button" onClick={onOpenSettings}>Open settings</button>
-        </Notice>
-      )}
-      {error && <Notice tone="error">{error}</Notice>}
-      {warning && <Notice tone="neutral">Showing cached catalog data · {warning}</Notice>}
-
-      <div className="catalog-controls">
-        <label className="field"><span>Season</span><select value={seasonId} onChange={(event) => setSeasonId(event.target.value)}>{seasons.map((season) => <option key={season.id} value={season.id}>{season.title}{season.current ? " · Current" : ""}</option>)}</select></label>
-        <span className="cache-time">{refreshedAt ? `Updated ${relativeTime(refreshedAt)}` : "Loading catalog"}</span>
-      </div>
-
-      {loading && events.length === 0 ? <div className="empty-state"><span>F1</span><p>Loading the F1TV catalog…</p></div> : (
-        <>
-          <div className="event-strip" aria-label="Grand Prix events">
-            {events.map((event) => {
-              const disabled = event.status === "future" || !event.replayAvailable;
-              const label = event.status === "current"
-                ? "This weekend"
-                : event.status === "future"
-                  ? `Future · ${eventDate(event)}`
-                  : event.replayAvailable ? "Replay available" : "Replay unavailable";
-              return <button key={event.id} disabled={disabled} aria-current={event.status === "current" ? "date" : undefined} className={`${event.id === eventId ? "active " : ""}event-card--${event.status}`} onClick={() => setEventId(event.id)}><small>{event.round ? `Round ${event.round}` : event.season}</small><strong>{event.country || event.title.replace(/Formula 1|Grand Prix/gi, "").replace(/\b(?:19|20)\d{2}\b/g, "").trim()}</strong><span>{label}</span></button>;
-            })}
-          </div>
-
-          <div className="section-heading catalog-session-heading"><div><div className="eyebrow">Available sessions</div><h3>{events.find((event) => event.id === eventId)?.title || "Select an event"}</h3></div><span className="count-chip">{sessions.length} sessions</span></div>
-          {sessions.length === 0 ? <div className="empty-state"><span>00</span><p>{loading ? "Loading sessions…" : "No supported Formula 1 sessions found."}</p></div> : (
-            <div className="session-grid">
-              {sessions.map((session) => {
-                const existing = jobs.find((job) => job.contentId === session.id && ["queued", "running", "completed"].includes(job.status));
-                return <article className="session-card" key={session.id}>
-                  {session.thumbnailUrl ? <img src={session.thumbnailUrl} alt="" loading="lazy" /> : <div className="session-card__placeholder">F1</div>}
-                  <div className="session-card__body"><span className="status">{session.type}</span><h3>{session.title}</h3><p>{displayDate(session.startDate)}{session.durationLabel ? ` · ${session.durationLabel}` : ""}</p><div className="session-card__footer"><small>BEST · ENG · {defaultFeed}</small><button className="primary-button primary-button--small" disabled={!configured || !session.available || Boolean(existing) || queueing === session.id} onClick={() => void queue(session)}>{existing ? existing.status : queueing === session.id ? "Adding…" : session.available ? "Download MP4" : "Not available"}</button></div></div>
-                </article>;
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-const QueueJobCard = memo(function QueueJobCard({ job, busy, onCancel, onRemove }: {
-  job: Job;
-  busy: boolean;
-  onCancel: (job: Job) => void;
-  onRemove: (job: Job) => void;
-}) {
-  return (
-    <article className="job-card">
-      <div className="job-card__top">
-        <div>
-          <span className={`status status--${job.status}`}>{job.status}</span>
-          <h3>{jobName(job)}</h3>
-        </div>
-        <span className="job-time">{relativeTime(job.createdAt)}</span>
-      </div>
-      <div className="progress-track" aria-label={`${job.progress}% complete`}>
-        <span style={{ width: `${job.progress}%` }} />
-      </div>
-      <div className="job-meta">
-        <span>{job.quality === "best" ? "Best quality" : job.quality}</span>
-        <span>{job.audio.toUpperCase()}</span>
-        {job.channel && <span>{job.channel}</span>}
-      </div>
-      <div className="job-card__footer">
-        <p>{job.message}</p>
-        <div className="job-card__actions">
-          {(job.status === "queued" || job.status === "running") && (
-            <button className="quiet-button" disabled={busy} onClick={() => onCancel(job)}>Cancel</button>
-          )}
-          <button className="quiet-button quiet-button--danger" disabled={busy} onClick={() => onRemove(job)}>Remove</button>
-        </div>
-      </div>
-    </article>
-  );
-});
-
-function CancelDialog({ job, busy, error, onClose, onConfirm }: {
-  job: Job;
-  busy: boolean;
-  error: string;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  const dismissButton = useRef<HTMLButtonElement>(null);
-
+    return () => controller.abort();
+  }, [seasonId, refresh]);
+  const selected = events.find((e) => e.id === eventId);
+  const latest =
+    events
+      .filter((e) => e.replayAvailable && e.status === "completed")
+      .at(-1) ?? events.find((e) => e.replayAvailable);
   useEffect(() => {
-    dismissButton.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
+    setSessions([]);
+    setSessionError("");
+    if (
+      screen !== "weekend" ||
+      !selected?.replayAvailable ||
+      selected.status === "future" ||
+      !/^p\d+$|^s\d+-m\d+$/.test(selected.id)
+    )
+      return;
+    const controller = new AbortController();
+    setSessionLoading(true);
+    const request = refresh
+      ? api<Catalog<Session[]>>("/api/catalog/refresh", {
+          method: "POST",
+          body: JSON.stringify({ scope: "sessions", id: selected.id }),
+          signal: controller.signal,
+        })
+      : api<Catalog<Session[]>>(
+          "/api/catalog/events/" + selected.id + "/sessions",
+          { signal: controller.signal },
+        );
+    void request
+      .then((r) => {
+        setSessions(r.data);
+        setWarning(r.warning ?? "");
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setSessionError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSessionLoading(false);
+      });
+    return () => {
+      controller.abort();
+      setSessionLoading(false);
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [busy, onClose]);
-
-  return (
-    <div className="dialog-backdrop" role="presentation">
-      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title" aria-describedby="cancel-dialog-description">
-        <div className="eyebrow">Cancel download</div>
-        <h2 id="cancel-dialog-title">Stop {jobName(job)}?</h2>
-        <p id="cancel-dialog-description">The download will stop and any partially downloaded file will be removed. You can download this session again later.</p>
-        {error && <Notice tone="error">{error}</Notice>}
-        <div className="confirm-dialog__actions">
-          <button ref={dismissButton} className="quiet-button" disabled={busy} onClick={onClose}>Keep downloading</button>
-          <button className="primary-button primary-button--danger" disabled={busy} onClick={onConfirm}>{busy ? "Cancelling…" : "Cancel download"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RemoveDialog({ job, busy, error, onClose, onConfirm }: {
-  job: Job;
-  busy: boolean;
-  error: string;
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  const dismissButton = useRef<HTMLButtonElement>(null);
-  const active = job.status === "queued" || job.status === "running";
-
+  }, [
+    selected?.id,
+    selected?.replayAvailable,
+    selected?.status,
+    screen,
+    refresh,
+  ]);
   useEffect(() => {
-    dismissButton.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
+    const onPop = () => {
+      const p = new URLSearchParams(location.search);
+      setScreen(screenFromUrl());
+      if (p.get("season")) setSeasonId(p.get("season")!);
+      setEventId(p.get("event") ?? "");
+      setWatchId(p.get("job") ?? "");
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [busy, onClose]);
-
-  return (
-    <div className="dialog-backdrop" role="presentation">
-      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-dialog-title" aria-describedby="remove-dialog-description">
-        <div className="eyebrow">Remove download</div>
-        <h2 id="remove-dialog-title">Remove {jobName(job)}?</h2>
-        <p id="remove-dialog-description">
-          {active ? "The running job will be stopped. " : ""}
-          The job record and every local HQ, LQ, partial, and conversion file will be permanently deleted.
-        </p>
-        {error && <Notice tone="error">{error}</Notice>}
-        <div className="confirm-dialog__actions">
-          <button ref={dismissButton} className="quiet-button" disabled={busy} onClick={onClose}>Keep download</button>
-          <button className="primary-button primary-button--danger" disabled={busy} onClick={onConfirm}>{busy ? "Removing…" : "Remove permanently"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function QueuePanel({ jobs, onCancel, onRemove }: {
-  jobs: Job[];
-  onCancel: (id: string) => Promise<void>;
-  onRemove: (id: string) => Promise<void>;
-}) {
-  const [selectedCancelJob, setSelectedCancelJob] = useState<Job | null>(null);
-  const [selectedRemoveJob, setSelectedRemoveJob] = useState<Job | null>(null);
-  const [cancelling, setCancelling] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [cancelError, setCancelError] = useState("");
-  const [removeError, setRemoveError] = useState("");
-  const queueJobs = jobs.filter((job) => job.status !== "completed");
-
-  const closeCancelDialog = useCallback(() => {
-    if (cancelling) return;
-    setSelectedCancelJob(null);
-    setCancelError("");
-  }, [cancelling]);
-
-  const closeRemoveDialog = useCallback(() => {
-    if (removing) return;
-    setSelectedRemoveJob(null);
-    setRemoveError("");
-  }, [removing]);
-
-  async function confirmCancellation() {
-    if (!selectedCancelJob) return;
-    setCancelling(true);
-    setCancelError("");
-    try {
-      await onCancel(selectedCancelJob.id);
-      setSelectedCancelJob(null);
-    } catch (caught) {
-      setCancelError(caught instanceof Error ? caught.message : "Could not cancel the download");
-    } finally {
-      setCancelling(false);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  function navigate(
+    view: Screen,
+    opts: {
+      event?: Event;
+      job?: Job;
+      eventId?: string;
+      seasonId?: string;
+    } = {},
+  ) {
+    const p = new URLSearchParams();
+    p.set("view", view);
+    const targetSeason = opts.seasonId ?? seasonId;
+    if (targetSeason) p.set("season", targetSeason);
+    if (opts.seasonId) setSeasonId(opts.seasonId);
+    if (opts.event) {
+      setEventId(opts.event.id);
+      p.set("event", opts.event.id);
+      setSessionType("All");
+    } else if (opts.eventId) {
+      setEventId(opts.eventId);
+      p.set("event", opts.eventId);
+    } else if (eventId) p.set("event", eventId);
+    if (opts.job) {
+      setWatchId(opts.job.id);
+      p.set("job", opts.job.id);
     }
+    setScreen(view);
+    setError("");
+    setToast("");
+    history.pushState(null, "", "?" + p.toString());
+    window.scrollTo({ top: 0, behavior: "instant" });
   }
-
-  async function confirmRemoval() {
-    if (!selectedRemoveJob) return;
-    setRemoving(true);
-    setRemoveError("");
-    try {
-      await onRemove(selectedRemoveJob.id);
-      setSelectedRemoveJob(null);
-    } catch (caught) {
-      setRemoveError(caught instanceof Error ? caught.message : "Could not remove the download");
-    } finally {
-      setRemoving(false);
-    }
-  }
-
-  function openCancelDialog(job: Job) {
-    setCancelError("");
-    setSelectedCancelJob(job);
-  }
-
-  function openRemoveDialog(job: Job) {
-    setRemoveError("");
-    setSelectedRemoveJob(job);
-  }
-
-  return (
-    <section className="panel">
-      <div className="section-heading">
-        <div>
-          <div className="eyebrow">Download queue</div>
-          <h2>One clean line.</h2>
-        </div>
-        <span className="count-chip">{queueJobs.length} jobs</span>
-      </div>
-
-      {queueJobs.length === 0 ? (
-        <div className="empty-state"><span>00</span><p>No queued downloads. Add a session when you’re ready.</p></div>
-      ) : (
-        <div className="job-list">
-          {queueJobs.map((job) => (
-            <QueueJobCard
-              job={job}
-              busy={removing && selectedRemoveJob?.id === job.id}
-              key={job.id}
-              onCancel={openCancelDialog}
-              onRemove={openRemoveDialog}
-            />
-          ))}
-        </div>
-      )}
-      {selectedCancelJob && <CancelDialog job={selectedCancelJob} busy={cancelling} error={cancelError} onClose={closeCancelDialog} onConfirm={() => void confirmCancellation()} />}
-      {selectedRemoveJob && <RemoveDialog job={selectedRemoveJob} busy={removing} error={removeError} onClose={closeRemoveDialog} onConfirm={() => void confirmRemoval()} />}
-    </section>
-  );
-}
-
-function DownloadsPanel({ jobs, onRetry, onRemove }: {
-  jobs: Job[];
-  onRetry: (id: string) => Promise<void>;
-  onRemove: (id: string) => Promise<void>;
-}) {
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const [selectedRemoveJob, setSelectedRemoveJob] = useState<Job | null>(null);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState("");
-  const [removeError, setRemoveError] = useState("");
-  const downloads = jobs.filter((job) => job.status === "completed" && job.outputFile);
-
-  async function retry(jobId: string) {
-    setRetrying(jobId);
+  async function action(id: string, fn: () => Promise<void>) {
+    setBusy(id);
     setError("");
     try {
-      await onRetry(jobId);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not retry mobile conversion");
+      await fn();
+      await Promise.all([syncJobs(), syncSettings()]);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "The action could not complete",
+      );
     } finally {
-      setRetrying(null);
+      setBusy(null);
     }
   }
-
-  const closeRemoveDialog = useCallback(() => {
-    if (removing) return;
-    setSelectedRemoveJob(null);
-    setRemoveError("");
-  }, [removing]);
-
-  async function remove() {
-    if (!selectedRemoveJob) return;
-    setRemoving(true);
-    setRemoveError("");
-    try {
-      await onRemove(selectedRemoveJob.id);
-      setSelectedRemoveJob(null);
-    } catch (caught) {
-      setRemoveError(caught instanceof Error ? caught.message : "Could not remove the download");
-    } finally {
-      setRemoving(false);
-    }
+  async function queue(session: Session) {
+    await action(session.id, async () => {
+      await api("/api/catalog/sessions/" + session.id + "/download", {
+        method: "POST",
+        body: JSON.stringify({ eventId: session.eventId }),
+      });
+      setToast(session.title + " added to the queue.");
+    });
   }
-
-  return (
-    <section className="panel">
-      <div className="section-heading">
-        <div><div className="eyebrow">MP4 library</div><h2>Ready to watch.</h2></div>
-        <span className="count-chip">{downloads.length} files</span>
+  const completed = jobs.filter((j) => j.status === "completed");
+  const active = jobs.filter(
+    (j) => j.status === "queued" || j.status === "running",
+  );
+  const running = active.find((j) => j.status === "running");
+  const queued = active
+    .filter((j) => j.status === "queued")
+    .sort(
+      (a, b) =>
+        a.position - b.position || a.createdAt.localeCompare(b.createdAt),
+    );
+  const failed = jobs.filter((j) => j.status === "failed");
+  const watched = completed.find((j) => j.id === watchId) ?? completed[0];
+  const storageReady = settings.storage.ready;
+  const refreshButton = (
+    <Button
+      disabled={loading || sessionLoading}
+      onClick={() => setRefresh((x) => x + 1)}
+    >
+      <RefreshCw size={16} />
+      Refresh
+    </Button>
+  );
+  function navigation(mobile = false) {
+    return navItems.map((item) => {
+      const current =
+        screen === item.id ||
+        (item.id === "browse" && screen === "weekend") ||
+        (item.id === "downloads" && screen === "watch");
+      return (
+        <button
+          key={item.id}
+          type="button"
+          aria-current={current ? "page" : undefined}
+          onClick={() => navigate(item.id)}
+        >
+          {mobile && <item.Icon size={18} />}
+          <span>
+            {item.label}
+            {item.id === "queue" && active.length > 0 && (
+              <b className="fd-nav-count">{active.length}</b>
+            )}
+          </span>
+        </button>
+      );
+    });
+  }
+  function hero(event: Event, link = false) {
+    return (
+      <div className="fd-hero">
+        <Picture src={event.thumbnailUrl} />
+        <div className="fd-hero-copy">
+          <span className="fd-eyebrow">
+            {link
+              ? "Latest available replay"
+              : "Round " + (event.round ?? "—") + " · " + event.season}
+          </span>
+          {link ? (
+            <h2>{name(event)} Grand Prix</h2>
+          ) : (
+            <h1>{name(event)} Grand Prix</h1>
+          )}
+          <div className="fd-hero-meta">{event.title}</div>
+          {link ? (
+            <Button primary onClick={() => navigate("weekend", { event })}>
+              Browse weekend
+              <ArrowRight size={16} />
+            </Button>
+          ) : (
+            <div className="fd-policy" style={{ color: "#fff" }}>
+              720p · English · F1 LIVE
+            </div>
+          )}
+        </div>
       </div>
-      {error && <Notice tone="error">{error}</Notice>}
-      {downloads.length === 0 ? (
-        <div className="empty-state"><span>MP4</span><p>Completed sessions will appear here.</p></div>
-      ) : (
-        <div className="download-grid">
-          {downloads.map((job) => (
-            <article className="download-card" key={job.id}>
-              <div className="download-card__flag" aria-hidden="true" />
-              <div className="status status--completed">ready</div>
-              <h3>{jobName(job)}</h3>
-              <p>{job.quality === "best" ? "Best available quality" : job.quality} · {job.audio.toUpperCase()}</p>
-              {job.files?.lq.status === "running" && (
-                <div className="conversion-progress" aria-label={`Mobile conversion ${job.files.lq.progress}%`}>
-                  <div style={{ width: `${job.files.lq.progress}%` }} />
-                </div>
-              )}
-              {job.files?.lq.status !== "completed" && <p className="conversion-state">{job.files?.lq.message || "Preparing mobile MP4"}</p>}
-              <div className="download-actions">
-                <a className="quiet-button" href={`/api/downloads/${job.id}/file?variant=hq&download=1`}>
-                  Download HQ · {fileSize(job.files?.hq.size)}
-                </a>
-                {job.files?.lq.available ? (
-                  <a className="primary-button primary-button--small" href={`/api/downloads/${job.id}/file?variant=lq&download=1`}>
-                    Download LQ · {fileSize(job.files.lq.size)}
-                  </a>
-                ) : job.files?.lq.status === "failed" ? (
-                  <button className="primary-button primary-button--small" disabled={retrying === job.id} onClick={() => void retry(job.id)}>
-                    {retrying === job.id ? "Retrying…" : "Retry LQ conversion"}
-                  </button>
-                ) : (
-                  <button className="primary-button primary-button--small" disabled>
-                    {job.files?.lq.status === "running" ? `Creating LQ · ${job.files.lq.progress}%` : "LQ queued"}
-                  </button>
-                )}
-                <button
-                  className="quiet-button quiet-button--danger"
-                  disabled={removing && selectedRemoveJob?.id === job.id}
-                  onClick={() => { setRemoveError(""); setSelectedRemoveJob(job); }}
-                >
-                  {removing && selectedRemoveJob?.id === job.id ? "Removing…" : "Remove"}
-                </button>
-              </div>
-            </article>
+    );
+  }
+  function loadingView() {
+    return (
+      <>
+        <div
+          className="fd-loading"
+          aria-busy="true"
+          aria-label="Loading catalog"
+        >
+          {[0, 1, 2].map((i) => (
+            <div className="fd-skeleton" key={i} />
           ))}
         </div>
-      )}
-      {selectedRemoveJob && <RemoveDialog job={selectedRemoveJob} busy={removing} error={removeError} onClose={closeRemoveDialog} onConfirm={() => void remove()} />}
-    </section>
-  );
-}
-
-function SettingsPanel({ settings, onChanged }: { settings: Settings; onChanged: () => Promise<void> }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [feedBusy, setFeedBusy] = useState(false);
-
-  async function changeDefaultFeed(defaultFeed: DownloadFeed) {
-    setFeedBusy(true); setError(""); setMessage("");
-    try {
-      const result = await api<{ defaultFeed: DownloadFeed; updatedJobs: number }>("/api/settings/default-feed", {
-        method: "PUT",
-        body: JSON.stringify({ defaultFeed })
+        <p className="fd-loading-copy">Loading replays…</p>
+      </>
+    );
+  }
+  function browseView() {
+    const visible = events
+      .filter(
+        (e) =>
+          (availability === "all" ||
+            (availability === "ready" &&
+              e.status === "completed" &&
+              e.replayAvailable) ||
+            (availability === "upcoming" && e.status !== "completed")) &&
+          (e.title + " " + e.country + " " + name(e))
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+      )
+      .slice()
+      .sort((a, b) => {
+        if (a.status === "completed" && b.status === "completed")
+          return (b.round ?? 0) - (a.round ?? 0);
+        if (a.status === "completed") return -1;
+        if (b.status === "completed") return 1;
+        return (a.round ?? 0) - (b.round ?? 0);
       });
-      const queued = result.updatedJobs === 1 ? "1 queued job" : `${result.updatedJobs} queued jobs`;
-      setMessage(`Default feed changed to ${result.defaultFeed}. Updated ${queued}.`);
-      await onChanged();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not change the default feed");
-    } finally { setFeedBusy(false); }
+    return (
+      <>
+        <Heading
+          title="Browse replays"
+          subtitle="Formula 1 race weekends, season by season."
+        >
+          {refreshButton}
+        </Heading>
+        {catalogError ? (
+          <Empty
+            title="The replay catalog could not load"
+            icon={<WifiOff />}
+            onBrowse={() => setRefresh((x) => x + 1)}
+            label="Try again"
+          >
+            {catalogError}
+          </Empty>
+        ) : loading ? (
+          loadingView()
+        ) : (
+          <>
+            {latest && hero(latest, true)}
+            <div className="fd-toolbar">
+              <select
+                className="fd-select"
+                style={{ width: 130 }}
+                aria-label="Season"
+                value={seasonId}
+                onChange={(e) => {
+                  setSeasonId(e.target.value);
+                  setEventId("");
+                  const p = new URLSearchParams(location.search);
+                  p.set("season", e.target.value);
+                  p.delete("event");
+                  history.replaceState(null, "", "?" + p.toString());
+                }}
+              >
+                {seasons.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.year}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="fd-select"
+                style={{ width: 175 }}
+                aria-label="Replay availability"
+                value={availability}
+                onChange={(e) => setAvailability(e.target.value)}
+              >
+                <option value="all">All weekends</option>
+                <option value="ready">Replays available</option>
+                <option value="upcoming">Upcoming</option>
+              </select>
+              <label className="fd-search">
+                <Search />
+                <input
+                  className="fd-input"
+                  type="search"
+                  value={search}
+                  placeholder="Search city or circuit"
+                  aria-label="Search city or circuit"
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="fd-section-head">
+              <h2>{seasons.find((s) => s.id === seasonId)?.year} season</h2>
+              <span className="fd-muted fd-small">
+                {visible.length} weekends
+              </span>
+            </div>
+            <div className="fd-weekends">
+              {visible.map((e) => (
+                <button
+                  className="fd-event"
+                  key={e.id}
+                  type="button"
+                  onClick={() => navigate("weekend", { event: e })}
+                  aria-label={"View " + name(e) + " race weekend"}
+                >
+                  <div className="fd-event-image">
+                    <Picture src={e.thumbnailUrl} />
+                    <span className="fd-round">ROUND {e.round ?? "—"}</span>
+                  </div>
+                  <div className="fd-event-info">
+                    <h3>{name(e)}</h3>
+                    <p className="fd-small fd-muted">{e.title}</p>
+                    <div className="fd-event-bottom">
+                      <span
+                        className={
+                          "fd-badge " +
+                          (e.status === "completed" && e.replayAvailable
+                            ? "fd-good"
+                            : "")
+                        }
+                      >
+                        {e.status === "completed" && e.replayAvailable
+                          ? "Replays available"
+                          : e.status === "current"
+                            ? "This weekend"
+                            : "Upcoming"}
+                      </span>
+                      <span>{dateRange(e)}</span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {!visible.length && (
+              <Empty
+                title="No matching weekends"
+                onBrowse={() => {
+                  setSearch("");
+                  setAvailability("all");
+                }}
+                label="Clear filters"
+              >
+                Try another city, circuit or availability filter.
+              </Empty>
+            )}
+          </>
+        )}
+      </>
+    );
   }
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    setBusy(true); setError(""); setMessage("");
-    try {
-      await api("/api/settings/credentials", { method: "PUT", body: JSON.stringify({ username, password }) });
-      setUsername(""); setPassword(""); setMessage("Credentials encrypted and saved.");
-      await onChanged();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not save credentials");
-    } finally { setBusy(false); }
-  }
-
-  async function remove() {
-    if (!window.confirm("Remove the stored F1 TV credentials?")) return;
-    setBusy(true); setError(""); setMessage("");
-    try {
-      await api("/api/settings/credentials", { method: "DELETE" });
-      setMessage("Stored credentials removed.");
-      await onChanged();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not remove credentials");
-    } finally { setBusy(false); }
-  }
-
-  return (
-    <section className="panel settings-panel">
-      <div className="eyebrow">Private configuration</div>
-      <h2>F1 TV account.</h2>
-      <p className="lede">Values are encrypted before they reach disk and are never returned to the browser. Saving replaces the previous account.</p>
-      <div className="default-feed-setting">
-        <label className="field field--wide">
-          <span>Default download feed</span>
-          <select disabled={feedBusy} value={settings.defaultFeed} onChange={(event) => void changeDefaultFeed(event.target.value as DownloadFeed)}>
-            <option value="F1 LIVE">F1 LIVE</option>
-            <option value="INTERNATIONAL">INTERNATIONAL</option>
-          </select>
-          <small>Changing this also updates every download that is still queued.</small>
-        </label>
-      </div>
-      <div className="credential-state">
-        <span className={`state-dot ${settings.credentialsConfigured ? "state-dot--ok" : ""}`} />
-        <div><strong>{settings.credentialsConfigured ? "Credentials configured" : "No credentials stored"}</strong><small>Encryption {settings.encryptionReady ? "ready" : "not configured"}</small></div>
-      </div>
-      {message && <Notice tone="success">{message}</Notice>}
-      {error && <Notice tone="error">{error}</Notice>}
-      <form className="session-form" onSubmit={save}>
-        <label className="field field--wide"><span>F1 TV username</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
-        <label className="field field--wide"><span>F1 TV password</span><input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
-        <div className="settings-actions">
-          <button className="primary-button" disabled={busy || !settings.encryptionReady}>{busy ? "Saving…" : "Encrypt & save"}</button>
-          {settings.credentialsConfigured && <button type="button" className="quiet-button quiet-button--danger" disabled={busy} onClick={() => void remove()}>Remove</button>}
+  function weekendView() {
+    if (loading) return loadingView();
+    if (!selected)
+      return (
+        <Empty
+          title="Choose a race weekend"
+          onBrowse={() => navigate("browse")}
+        >
+          Select a weekend to see its available sessions.
+        </Empty>
+      );
+    const pending = selected.status === "future" || !selected.replayAvailable;
+    const visible = sessions.filter(
+      (s) =>
+        sessionType === "All" ||
+        s.type === sessionType ||
+        (sessionType === "Sprint" && s.type.startsWith("Sprint")),
+    );
+    return (
+      <>
+        <div className="fd-breadcrumb">
+          <button onClick={() => navigate("browse")}>Browse</button>
+          <span>
+            / {selected.season} / {name(selected)}
+          </span>
         </div>
-      </form>
-    </section>
-  );
-}
-
-export function App() {
-  const [tab, setTab] = useState<Tab>("sessions");
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [settings, setSettings] = useState<Settings>({ credentialsConfigured: false, encryptionReady: false, port: 43729, defaultFeed: "F1 LIVE" });
-  const [online, setOnline] = useState(true);
-  const jobRequestVersions = useRef(new Map<string, number>());
-
-  const refreshSettings = useCallback(async () => {
-    const next = await api<Settings>("/api/settings");
-    setSettings(next);
-  }, []);
-
-  const refreshJobs = useCallback(async () => {
-    try {
-      const response = await api<{ jobs: Job[] }>("/api/jobs");
-      setJobs(response.jobs);
-      setOnline(true);
-    } catch { setOnline(false); }
-  }, []);
-
-  useEffect(() => {
-    void refreshSettings().catch(() => setOnline(false));
-    void refreshJobs();
-
-    const events = new EventSource("/api/jobs/events");
-    events.onopen = () => setOnline(true);
-    events.onerror = () => setOnline(false);
-    events.addEventListener("job-update", (event) => {
-      let jobId: string;
-      try {
-        const payload = JSON.parse((event as MessageEvent<string>).data) as { jobId?: unknown };
-        if (typeof payload.jobId !== "string" || !payload.jobId) return;
-        jobId = payload.jobId;
-      } catch {
-        return;
-      }
-
-      const version = (jobRequestVersions.current.get(jobId) ?? 0) + 1;
-      jobRequestVersions.current.set(jobId, version);
-      void api<{ job: Job }>(`/api/jobs/${encodeURIComponent(jobId)}`)
-        .then(({ job }) => {
-          if (jobRequestVersions.current.get(jobId) !== version) return;
-          setJobs((current) => mergeJob(current, job));
-          setOnline(true);
-        })
-        .catch(() => {
-          if (jobRequestVersions.current.get(jobId) === version) setOnline(false);
-        });
-    });
-    events.addEventListener("job-removed", (event) => {
-      let jobId: string;
-      try {
-        const payload = JSON.parse((event as MessageEvent<string>).data) as { jobId?: unknown };
-        if (typeof payload.jobId !== "string" || !payload.jobId) return;
-        jobId = payload.jobId;
-      } catch {
-        return;
-      }
-      jobRequestVersions.current.set(jobId, (jobRequestVersions.current.get(jobId) ?? 0) + 1);
-      setJobs((current) => current.filter((job) => job.id !== jobId));
-      setOnline(true);
-    });
-
-    return () => events.close();
-  }, [refreshJobs, refreshSettings]);
-
-  const activeCount = useMemo(() => jobs.filter((job) => job.status === "queued" || job.status === "running").length, [jobs]);
-
-  const cancel = useCallback(async (id: string) => {
-    const response = await api<{ job: Job }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
-    setJobs((current) => mergeJob(current, response.job));
-  }, []);
-
-  const removeJob = useCallback(async (id: string) => {
-    await api<void>(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
-    jobRequestVersions.current.set(id, (jobRequestVersions.current.get(id) ?? 0) + 1);
-    setJobs((current) => current.filter((job) => job.id !== id));
-  }, []);
-
-  const retryConversion = useCallback(async (id: string) => {
-    const response = await api<{ job: Job }>(`/api/downloads/${encodeURIComponent(id)}/lq/retry`, { method: "POST" });
-    setJobs((current) => mergeJob(current, response.job));
-  }, []);
-
-  return (
-    <div className="app-shell">
-      <header className="topbar">
-        <button className="brand" onClick={() => setTab("sessions")} aria-label="F1TV Downloads home">
-          <span className="brand__mark">F1</span><span>DOWNLOADS</span>
-        </button>
-        <div className="runtime-state"><span className={`state-dot ${online ? "state-dot--ok" : ""}`} />{online ? "Harlem ready" : "Server offline"}</div>
-      </header>
-
-      <div className="workspace">
-        <aside className="sidebar">
-          <div className="sidebar__caption">CONTROL</div>
-          <nav aria-label="Main navigation">
-            {navigation.map((item) => (
-              <button className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}>
-                <span>{item.marker}</span>{item.label}
-                {item.id === "queue" && activeCount > 0 && <b>{activeCount}</b>}
-              </button>
-            ))}
-          </nav>
-          <div className="sidebar__foot">PORT {settings.port}<br />DUAL WORKERS</div>
-        </aside>
-
-        <main>
-          <div className="page-intro">
-            <p>F1TV / PRIVATE ARCHIVE</p>
-            <h1>{tab === "sessions" ? "Pick the session.\nKeep the race." : navigation.find((item) => item.id === tab)?.label}</h1>
+        {hero(selected)}
+        <div className="fd-section-head">
+          <h2>Weekend sessions</h2>
+          {refreshButton}
+        </div>
+        {pending ? (
+          <Empty
+            title="Replays are not available yet"
+            icon={<CalendarDays />}
+            onBrowse={() => navigate("browse")}
+          >
+            Return after the sessions finish to see available replays.
+          </Empty>
+        ) : (
+          <>
+            <div className="fd-chips" style={{ marginBottom: 16 }}>
+              {["All", "Race", "Qualifying", "Practice", "Sprint"].map((t) => (
+                <button
+                  type="button"
+                  className="fd-chip"
+                  key={t}
+                  aria-pressed={t === sessionType}
+                  onClick={() => setSessionType(t)}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            {sessionLoading ? (
+              loadingView()
+            ) : sessionError ? (
+              <Empty
+                title="Replays are not available yet"
+                onBrowse={() => setRefresh((x) => x + 1)}
+                label="Check again"
+              >
+                {sessionError}
+              </Empty>
+            ) : (
+              <>
+                <div className="fd-session-grid">
+                  {visible.map((s) => {
+                    const existing = jobs.find(
+                      (j) =>
+                        j.contentId === s.id &&
+                        ["running", "queued", "completed"].includes(j.status),
+                    );
+                    const downloaded = existing?.status === "completed";
+                    return (
+                      <article className="fd-session" key={s.id}>
+                        <div className="fd-thumb">
+                          <Picture src={s.thumbnailUrl} />
+                          <span className="fd-thumb-label">
+                            {s.durationLabel || duration(s.durationSeconds)}
+                          </span>
+                        </div>
+                        <div className="fd-card-body">
+                          <span className="fd-eyebrow fd-muted">{s.type}</span>
+                          <h3>{s.title}</h3>
+                          <p className="fd-small fd-muted">
+                            {s.startDate
+                              ? new Date(s.startDate).toLocaleString(
+                                  undefined,
+                                  {
+                                    day: "numeric",
+                                    month: "short",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  },
+                                )
+                              : "Replay"}
+                          </p>
+                          <div className="fd-card-footer">
+                            <span
+                              className={
+                                "fd-small " +
+                                (downloaded ? "fd-good" : "fd-muted")
+                              }
+                            >
+                              {downloaded ? "Downloaded" : "720p · English"}
+                            </span>
+                            <Button
+                              primary
+                              disabled={
+                                busy === s.id ||
+                                !s.available ||
+                                (!!existing && !downloaded) ||
+                                (downloaded &&
+                                  (!storageReady || !existing?.file?.available))
+                              }
+                              onClick={() => {
+                                if (downloaded)
+                                  navigate("watch", { job: existing! });
+                                else if (!settings.credentialsConfigured)
+                                  navigate("settings");
+                                else void queue(s);
+                              }}
+                            >
+                              {downloaded
+                                ? "Watch"
+                                : existing
+                                  ? existing.status
+                                  : busy === s.id
+                                    ? "Adding…"
+                                    : !s.available
+                                      ? "Not available"
+                                      : !settings.credentialsConfigured
+                                        ? "Connect account"
+                                        : "Add to queue"}
+                            </Button>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+                {!visible.length && (
+                  <Empty
+                    title={
+                      sessions.length
+                        ? "No sessions match this filter"
+                        : "Replays are not available yet"
+                    }
+                    onBrowse={() =>
+                      sessions.length
+                        ? setSessionType("All")
+                        : setRefresh((x) => x + 1)
+                    }
+                    label={
+                      sessions.length ? "Show all sessions" : "Check again"
+                    }
+                  >
+                    Only F1 LIVE replays with English audio can be downloaded.
+                  </Empty>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </>
+    );
+  }
+  function queueView() {
+    if (!active.length && !failed.length)
+      return (
+        <>
+          <Heading title="Queue" subtitle="Downloads run one at a time." />
+          <Empty
+            title="Your queue is clear"
+            onBrowse={() => navigate("browse")}
+            icon={<ListOrdered />}
+          >
+            Choose a replay and it will appear here.
+          </Empty>
+        </>
+      );
+    return (
+      <>
+        <Heading
+          title="Queue"
+          subtitle={
+            active.length +
+            " active or waiting · " +
+            failed.length +
+            " needs attention"
+          }
+        >
+          <Button
+            disabled={!online || !!busy}
+            onClick={() =>
+              void action("pause", async () => {
+                await api("/api/queue", {
+                  method: "POST",
+                  body: JSON.stringify({ paused: !settings.paused }),
+                });
+              })
+            }
+          >
+            {settings.paused ? "Resume queue" : "Pause queue"}
+          </Button>
+        </Heading>
+        {running && (
+          <article className="fd-active-job">
+            <div className="fd-job-head">
+              <Picture src={running.thumbnailUrl} className="fd-job-photo" />
+              <div className="fd-job-copy">
+                <span
+                  className={
+                    "fd-eyebrow " + (storageReady ? "fd-good" : "fd-warn")
+                  }
+                >
+                  {!online
+                    ? "Reconnecting"
+                    : !storageReady
+                      ? "Waiting for storage"
+                      : "Downloading"}
+                </span>
+                <h3>{running.title}</h3>
+                <p className="fd-small fd-muted">720p · English · F1 LIVE</p>
+              </div>
+            </div>
+            <div
+              className="fd-progress"
+              role="progressbar"
+              aria-label="Download progress"
+              aria-valuenow={running.progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span style={{ width: String(running.progress) + "%" }} />
+            </div>
+            <div className="fd-job-foot">
+              <span>{running.message}</span>
+              <Button
+                disabled={!online || !!busy}
+                onClick={() => {
+                  setDialog({ kind: "cancel", job: running });
+                  setDialogError("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </article>
+        )}
+        <div className="fd-section-head">
+          <h2>Up next</h2>
+          <span className="fd-small fd-muted">
+            {settings.paused
+              ? "Queue paused"
+              : !storageReady
+                ? "Waiting for storage"
+                : !settings.storage.enoughSpace
+                  ? "Waiting for free space"
+                  : "In download order"}
+          </span>
+        </div>
+        {queued.map((j, i) => (
+          <div className="fd-list-row" key={j.id}>
+            <span className="fd-list-number">{i + 1}</span>
+            <div className="fd-list-copy">
+              <h3>{j.title}</h3>
+              <p className="fd-small fd-muted">Queued · 720p · English</p>
+            </div>
+            <div className="fd-row-actions">
+              <Button
+                label={"Move " + j.title + " up"}
+                disabled={i === 0 || !!busy || !online}
+                onClick={() =>
+                  void action(j.id, async () => {
+                    await api("/api/jobs/" + j.id + "/move-up", {
+                      method: "POST",
+                    });
+                  })
+                }
+              >
+                <ArrowUp size={16} />
+              </Button>
+              <Button
+                disabled={!!busy || !online}
+                onClick={() => {
+                  setDialog({ kind: "cancel", job: j });
+                  setDialogError("");
+                }}
+              >
+                Remove
+              </Button>
+            </div>
           </div>
-          {tab === "sessions" && <SessionPanel configured={settings.credentialsConfigured} defaultFeed={settings.defaultFeed} jobs={jobs} onQueued={(job) => setJobs((current) => [job, ...current])} onOpenSettings={() => setTab("settings")} />}
-          {tab === "queue" && <QueuePanel jobs={jobs} onCancel={cancel} onRemove={removeJob} />}
-          {tab === "downloads" && <DownloadsPanel jobs={jobs} onRetry={retryConversion} onRemove={removeJob} />}
-          {tab === "settings" && <SettingsPanel settings={settings} onChanged={async () => { await Promise.all([refreshSettings(), refreshJobs()]); }} />}
-        </main>
+        ))}
+        {!queued.length && (
+          <p className="fd-small fd-muted">No other sessions queued.</p>
+        )}
+        {failed.length > 0 && (
+          <>
+            <div className="fd-section-head">
+              <h2>Needs attention</h2>
+            </div>
+            {failed.map((j) => (
+              <div className="fd-list-row" key={j.id}>
+                <div className="fd-list-copy">
+                  <h3>{j.title}</h3>
+                  <p className="fd-small fd-warn">{j.message}</p>
+                </div>
+                <div className="fd-row-actions">
+                  <Button
+                    primary
+                    disabled={!!busy || !online}
+                    onClick={() =>
+                      void action(j.id, async () => {
+                        await api("/api/jobs/" + j.id + "/retry", {
+                          method: "POST",
+                        });
+                      })
+                    }
+                  >
+                    Retry
+                  </Button>
+                  <Button
+                    disabled={!!busy || !online}
+                    onClick={() => {
+                      setDialog({ kind: "remove", job: j });
+                      setDialogError("");
+                    }}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </>
+    );
+  }
+  function downloadsView() {
+    const visible = completed.filter((j) =>
+      (j.title ?? "").toLowerCase().includes(librarySearch.toLowerCase()),
+    );
+    return (
+      <>
+        <Heading
+          title="Downloads"
+          subtitle="One 720p MP4 per replay. Ready to watch or save."
+        >
+          <Button onClick={() => navigate("browse")}>Browse replays</Button>
+        </Heading>
+        {!completed.length ? (
+          <Empty
+            title="Your library starts here"
+            onBrowse={() => navigate("browse")}
+            icon={<Download />}
+          >
+            Downloaded replays will appear here, ready for your tablet.
+          </Empty>
+        ) : (
+          <>
+            <div className="fd-toolbar">
+              <label className="fd-search">
+                <Search />
+                <input
+                  className="fd-input"
+                  type="search"
+                  aria-label="Search downloads"
+                  placeholder="Search your downloads"
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                />
+              </label>
+              <span className="fd-muted fd-small">
+                {visible.length} downloads
+              </span>
+            </div>
+            <div className="fd-library">
+              {visible.map((j) => (
+                <article className="fd-session" key={j.id}>
+                  <div className="fd-thumb">
+                    <Picture src={j.thumbnailUrl} />
+                    <span className="fd-thumb-label">
+                      {duration(j.durationSeconds)}
+                    </span>
+                  </div>
+                  <div className="fd-card-body">
+                    <span className="fd-eyebrow fd-muted">
+                      {j.season ?? "Formula 1"} · Replay
+                    </span>
+                    <h3>{j.title}</h3>
+                    <p className="fd-small fd-muted">
+                      720p · English · {fileSize(j.file?.size)}
+                    </p>
+                    {!j.file?.available && (
+                      <p className="fd-small fd-warn">
+                        {storageReady
+                          ? "File is missing"
+                          : "Storage is unavailable"}
+                      </p>
+                    )}
+                    <div className="fd-card-footer">
+                      <Button
+                        primary
+                        disabled={!j.file?.available || !storageReady}
+                        onClick={() => navigate("watch", { job: j })}
+                      >
+                        <Play size={16} />
+                        Watch
+                      </Button>
+                      {j.file?.available && storageReady ? (
+                        <a
+                          className="fd-button"
+                          href={j.file.url + "?download=1"}
+                        >
+                          <Download size={16} />
+                          Save MP4
+                        </a>
+                      ) : (
+                        <Button disabled onClick={() => {}}>
+                          Save MP4
+                        </Button>
+                      )}
+                      <Button
+                        label={"Remove " + j.title}
+                        disabled={!storageReady || !!busy}
+                        onClick={() => {
+                          setDialog({ kind: "remove", job: j });
+                          setDialogError("");
+                        }}
+                      >
+                        <Trash2 size={16} />
+                      </Button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+            {!visible.length && (
+              <Empty
+                title="No matching downloads"
+                onBrowse={() => setLibrarySearch("")}
+                label="Clear search"
+              >
+                Try another replay name.
+              </Empty>
+            )}
+          </>
+        )}
+      </>
+    );
+  }
+  function watchView() {
+    if (!watched)
+      return (
+        <>
+          <Heading title="Watch" />
+          <Empty
+            title="Nothing to play yet"
+            onBrowse={() => navigate("browse")}
+            icon={<Play />}
+          >
+            Your downloaded replays will be available here.
+          </Empty>
+        </>
+      );
+    return (
+      <>
+        <div className="fd-breadcrumb">
+          <button onClick={() => navigate("downloads")}>Downloads</button>
+          <span>/ {watched.title}</span>
+        </div>
+        <div className="fd-player-layout">
+          <section>
+            {storageReady && watched.file?.available ? (
+              <video
+                className="fd-player"
+                key={watched.id}
+                src={watched.file.url}
+                controls
+                playsInline
+                preload="metadata"
+                poster={watched.thumbnailUrl || racePhoto}
+              />
+            ) : (
+              <Empty
+                title="Replay is unavailable"
+                onBrowse={() => navigate("downloads")}
+                label="Back to downloads"
+              >
+                {storageReady
+                  ? "The downloaded file is missing."
+                  : "Waiting for Synology media storage."}
+              </Empty>
+            )}
+            <div className="fd-watch-info">
+              <div>
+                <h1>{watched.title}</h1>
+                <p className="fd-small fd-muted" style={{ marginTop: 7 }}>
+                  {watched.season} · F1 LIVE · English ·{" "}
+                  {fileSize(watched.file?.size)}
+                </p>
+              </div>
+              {storageReady && watched.file?.available && (
+                <a
+                  className="fd-button fd-button-primary"
+                  href={watched.file.url + "?download=1"}
+                >
+                  <Download size={16} />
+                  Save MP4
+                </a>
+              )}
+            </div>
+            <p className="fd-small fd-muted" style={{ marginTop: 16 }}>
+              Save the MP4 to watch offline in your device’s video player.
+            </p>
+          </section>
+          <aside>
+            <h2>More from this weekend</h2>
+            {watched.eventId && (
+              <button
+                className="fd-next"
+                onClick={() => {
+                  const matching = events.find((e) => e.id === watched.eventId);
+                  if (matching) navigate("weekend", { event: matching });
+                  else {
+                    const season = seasons.find(
+                      (s) => s.year === watched.season,
+                    );
+                    navigate("weekend", {
+                      eventId: watched.eventId!,
+                      seasonId: season?.id,
+                    });
+                  }
+                }}
+              >
+                <Picture src={watched.thumbnailUrl} />
+                <span>
+                  View weekend sessions
+                  <ArrowRight size={14} />
+                </span>
+              </button>
+            )}
+          </aside>
+        </div>
+      </>
+    );
+  }
+  async function saveAccount(e: FormEvent) {
+    e.preventDefault();
+    await action("account", async () => {
+      await api("/api/settings/credentials", {
+        method: "PUT",
+        body: JSON.stringify({ username, password }),
+      });
+      setUsername("");
+      setPassword("");
+      setEditing(false);
+      setToast("Credentials saved securely.");
+    });
+  }
+  function settingsView() {
+    return (
+      <>
+        <Heading
+          title="Settings"
+          subtitle="Your F1TV account and media storage."
+        />
+        <div className="fd-settings">
+          <section className="fd-setting-panel">
+            <h2>F1TV account</h2>
+            <div className="fd-account-state">
+              <span className="fd-dot" />
+              <strong>
+                {settings.credentialsConfigured
+                  ? "Credentials saved"
+                  : settingsLoaded.current
+                    ? "Account not connected"
+                    : "Checking account"}
+              </strong>
+            </div>
+            <p className="fd-small fd-muted">
+              Your saved login is kept securely. Account details are never
+              displayed.
+            </p>
+            {editing || !settings.credentialsConfigured ? (
+              <form onSubmit={(e) => void saveAccount(e)}>
+                <div className="fd-account-fields">
+                  <label className="fd-field">
+                    F1TV email
+                    <input
+                      className="fd-input"
+                      autoComplete="username"
+                      type="email"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className="fd-field">
+                    Password
+                    <input
+                      className="fd-input"
+                      autoComplete="current-password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                  </label>
+                </div>
+                <div className="fd-row-actions">
+                  <button
+                    className="fd-button fd-button-primary"
+                    disabled={!!busy || !settings.encryptionReady || !online}
+                  >
+                    Save credentials
+                  </button>
+                  {settings.credentialsConfigured && (
+                    <Button
+                      disabled={!!busy}
+                      onClick={() => {
+                        setEditing(false);
+                        setPassword("");
+                        setUsername("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </div>
+              </form>
+            ) : (
+              <div className="fd-row-actions">
+                <Button onClick={() => setEditing(true)}>
+                  Replace credentials
+                </Button>
+                <Button
+                  onClick={() => {
+                    setDialog({ kind: "account" });
+                    setDialogError("");
+                  }}
+                >
+                  Remove
+                </Button>
+              </div>
+            )}
+            <div className="fd-section-head">
+              <h2>Download format</h2>
+            </div>
+            {[
+              ["Resolution", "720p"],
+              ["Feed", "F1 LIVE"],
+              ["Audio", "English only"],
+              ["File", "MP4"],
+            ].map(([k, v]) => (
+              <div className="fd-setting-line" key={k}>
+                <span>{k}</span>
+                <strong>{v}</strong>
+              </div>
+            ))}
+          </section>
+          <section className="fd-setting-panel">
+            <h2>Media storage</h2>
+            <div className="fd-account-state">
+              <span
+                className="fd-dot"
+                style={
+                  !storageReady ? { background: "var(--fd-amber)" } : undefined
+                }
+              />
+              <strong>
+                {storageReady ? "Synology connected" : "Waiting for Synology"}
+              </strong>
+            </div>
+            <p className="fd-storage-name">Homelab-workspace / f1tv-dl</p>
+            {storageReady ? (
+              <>
+                <div className="fd-setting-line">
+                  <span>Available space</span>
+                  <strong>{fileSize(settings.storage.freeBytes)}</strong>
+                </div>
+                <div className="fd-setting-line">
+                  <span>Downloads</span>
+                  <strong>{completed.length} files</strong>
+                </div>
+              </>
+            ) : (
+              <div className="fd-notice">{settings.storage.message}</div>
+            )}
+            <p className="fd-small fd-muted" style={{ marginTop: 16 }}>
+              Media is saved to Synology. Your account and queue stay on the
+              server.
+            </p>
+            <Button
+              disabled={!!busy || !online}
+              onClick={() =>
+                void action("storage", async () => {
+                  await syncSettings();
+                  setToast("Storage status updated.");
+                })
+              }
+            >
+              Check connection
+            </Button>
+          </section>
+        </div>
+      </>
+    );
+  }
+  async function confirmDialog() {
+    if (!dialog) return;
+    setBusy("dialog");
+    setDialogError("");
+    try {
+      if (dialog.kind === "account")
+        await api("/api/settings/credentials", { method: "DELETE" });
+      else if (dialog.kind === "cancel")
+        await api("/api/jobs/" + dialog.job!.id + "/cancel", {
+          method: "POST",
+        });
+      else {
+        const id = dialog.job!.id;
+        await api("/api/jobs/" + id, { method: "DELETE" });
+        versions.current.set(id, (versions.current.get(id) ?? 0) + 1);
+        setJobs((current) => current.filter((j) => j.id !== id));
+      }
+      await Promise.all([syncJobs(), syncSettings()]);
+      setDialog(null);
+    } catch (e) {
+      setDialogError(
+        e instanceof Error ? e.message : "The action could not complete",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <div id="f1-app" data-appearance="Dark" data-photo="Natural">
+      <div className="fd-stage">
+        <div className="fd-window">
+          <header className="fd-app-header">
+            <button
+              className="fd-brand"
+              onClick={() => navigate("browse")}
+              aria-label="F1TV Downloads home"
+            >
+              <span className="fd-brand-mark">F1</span>
+              <span>TV DOWNLOADS</span>
+            </button>
+            <nav className="fd-top-nav" aria-label="App navigation">
+              {navigation()}
+            </nav>
+            <span className="fd-online">
+              <span
+                className="fd-dot"
+                style={
+                  !online || !storageReady
+                    ? { background: "var(--fd-amber)" }
+                    : undefined
+                }
+              />
+              {!online
+                ? "Reconnecting"
+                : !storageReady
+                  ? "Storage offline"
+                  : "Connected"}
+            </span>
+          </header>
+          {!online ? (
+            <div className="fd-notice fd-app-notice" role="status">
+              Connection lost. Reconnecting… Your queue is saved.
+            </div>
+          ) : !storageReady ? (
+            <div className="fd-notice fd-app-notice" role="status">
+              <span>Media storage is unavailable. Downloads are waiting.</span>
+              <Button onClick={() => navigate("settings")}>View storage</Button>
+            </div>
+          ) : !settings.storage.enoughSpace ? (
+            <div className="fd-notice fd-app-notice">
+              Media storage is low on free space. New downloads are waiting.
+            </div>
+          ) : null}
+          {!settings.credentialsConfigured &&
+            settingsLoaded.current &&
+            screen !== "settings" && (
+              <div className="fd-notice fd-app-notice">
+                <span>Connect your F1TV account to download replays.</span>
+                <Button onClick={() => navigate("settings")}>
+                  Connect account
+                </Button>
+              </div>
+            )}
+          <main className="fd-main">
+            {error && (
+              <div className="fd-notice fd-error" role="alert">
+                {error}
+              </div>
+            )}
+            {warning && ["browse", "weekend"].includes(screen) && (
+              <div className="fd-notice" role="status">
+                Showing cached catalog data. {warning}
+              </div>
+            )}
+            {screen === "browse"
+              ? browseView()
+              : screen === "weekend"
+                ? weekendView()
+                : screen === "queue"
+                  ? queueView()
+                  : screen === "downloads"
+                    ? downloadsView()
+                    : screen === "watch"
+                      ? watchView()
+                      : settingsView()}
+          </main>
+          {toast && (
+            <div className="fd-toast" role="status">
+              {toast}
+            </div>
+          )}
+          <footer className="fd-app-footer">
+            <span>720p · English · F1 LIVE</span>
+            <span>
+              {storageReady ? "Saved to Synology" : "Waiting for media storage"}
+            </span>
+          </footer>
+          <nav className="fd-mobile-nav" aria-label="Mobile app navigation">
+            {navigation(true)}
+          </nav>
+        </div>
       </div>
-
-      <nav className="mobile-nav" aria-label="Mobile navigation">
-        {navigation.map((item) => <button className={tab === item.id ? "active" : ""} key={item.id} onClick={() => setTab(item.id)}><span>{item.marker}</span>{item.label}</button>)}
-      </nav>
+      {dialog && (
+        <Modal
+          title={
+            dialog.kind === "account"
+              ? "Remove saved credentials?"
+              : dialog.kind === "remove"
+                ? "Remove this replay?"
+                : dialog.job?.status === "running"
+                  ? "Cancel this download?"
+                  : "Remove this job?"
+          }
+          label={
+            dialog.kind === "account"
+              ? "Remove credentials"
+              : dialog.kind === "remove"
+                ? "Remove replay"
+                : "Cancel download"
+          }
+          busy={busy === "dialog"}
+          error={dialogError}
+          onClose={() => {
+            setDialog(null);
+            setDialogError("");
+          }}
+          onConfirm={() => void confirmDialog()}
+        >
+          {dialog.job && <p>{dialog.job.title}</p>}
+          <p>
+            {dialog.kind === "account"
+              ? "You can continue browsing. New downloads will need your F1TV account again."
+              : dialog.kind === "remove"
+                ? "The MP4 will be deleted from Synology and removed from Downloads."
+                : "The download will stop and its unfinished file will be removed."}
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }

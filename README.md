@@ -1,83 +1,51 @@
 # F1TV-DL-WebUI
 
-Self-hosted, tablet-friendly web UI for `f1tv-dl` with encrypted F1 TV credential settings, an account-ready Formula 1 catalog browser, a durable download queue, and MP4 playback or download.
+A self-hosted replay library for desktop, phone and tablet. Browse Formula 1 weekends, queue replays and watch or save a single native 720p MP4.
 
-## Implementation handoff
+## Download policy
 
-See [DOCS/IMPLEMENTATION-SPEC.md](DOCS/IMPLEMENTATION-SPEC.md) for the complete requirements, architecture, upstream integration findings, security requirements, deployment instructions, and acceptance criteria.
+Every new download uses **1280×720, F1 LIVE, English only**. The pinned downloader selects the provider's native stream and copies video and one English AAC track into MP4 without encoding. A missing feed, resolution or language is reported as unavailable; there is no International or resolution fallback. FFprobe verifies resolution, codecs, audio language and replay duration before an atomic rename publishes the file.
 
-Current status: the application is deployed on Harlem. Its server discovers the current season and archive directly from F1TV, while the download worker uses the configured account only when resolving an entitled replay.
+The provider may deliver HEVC or H.264. Native HEVC works in suitable device players; browser playback depends on the browser and installed codecs. Save MP4 uses the same file, supports HTTP ranges and works independently of browser decoding. File size depends on replay length and provider bitrate. There are no conversion workers, alternate copies, encoding presets or transcoding services.
 
-## Current feature slice
+## Interface and queue
 
-- Configure or remove F1 TV credentials without returning stored values to the browser.
-- Encrypt credentials at rest with AES-256-GCM using a deployment-provided key.
-- Browse every season exposed by F1TV, with the dynamically discovered current season selected by default.
-- See the complete current-season Formula 1 calendar in a wrapping grid, with completed replays, the active weekend, and disabled future rounds clearly distinguished.
-- Browse each available Grand Prix's practice, qualifying, sprint, sprint qualifying, and race replays.
-- Queue a replay with one click; the server derives the session URL and defaults to best quality, English audio, and the `F1 LIVE` feed.
-- Switch the default feed between `F1 LIVE` and `INTERNATIONAL` in Settings; queued jobs follow the selected default immediately.
-- Process one durable download at a time and recover an interrupted job after restart.
-- View progress, failures, completed downloads, cancel queued or active work, and permanently remove any job with all local files.
-- Keep the original HQ MP4 and independently create or reuse an Android-compatible 720p H.264/AAC MP4 below 3 GB.
-- Download either HQ or LQ with the exact file size shown; both variants support HTTP range requests.
-- Use a responsive phone and tablet interface.
+The approved dark interface has Browse, Weekend sessions, Queue, Downloads, Watch and Settings screens, with desktop top navigation and mobile bottom navigation. Real catalog imagery decorates weekends and sessions. City labels distinguish Miami, Austin and Las Vegas. Upcoming weekends remain browsable without pretending replays are available.
 
-The browser intentionally excludes F2/F3, highlights, shows, press conferences, documentaries, and F1 Kids. The UI never asks for a pasted session URL.
+The queue runs one download at a time. Pause prevents the next job from starting; a current download continues. Reorder queued jobs, cancel active work, retry failures or remove a replay and its files. SQLite persists queue state and pause across restarts. Interrupted downloads restart from the beginning of their staging directory; segment-level resume is not supported by the upstream engine. A five-minute inactivity watchdog considers both process output and file activity. Explicit deletion requests persist until storage recovers; unrelated directories are never swept.
 
-## Local development
+The browser refreshes its snapshot after reconnect, device wake and periodically while open. Idle SSE heartbeats keep the connection alive. Empty, offline, low-space, catalog-error and failed-download states have distinct messages.
 
-Node.js 22 and FFmpeg are required. The project pins Node in `.nvmrc`.
+## Development and verification
 
-```sh
-npm install
-APP_ENCRYPTION_KEY='use-a-private-value-of-at-least-24-characters' npm run dev
-```
+Use Node.js 22 and FFmpeg/FFprobe. Install with `npm ci`, provide a private `APP_ENCRYPTION_KEY` through your environment, and run `npm run dev` plus `npm run dev:client`. Open [the local client](http://localhost:43730); Vite proxies to port 43729. Development uses local `data/` and `downloads/` directories unless configured otherwise.
 
-Run the Vite client in a second terminal:
+`npm run verify` runs TypeScript checks, queue/API/storage tests, real FFmpeg media-validation tests, upstream patch checks and production builds. Chromium is included in the runtime for provider authentication. Installation rejects modified upstream source instead of silently losing the policy or authentication patches.
 
-```sh
-npm run dev:client
-```
+Never commit account details or deployment secrets. Repository-local secret files, only when explicitly requested, belong under the ignored root `SECRETS/` directory.
 
-Open `http://localhost:43730`. Vite proxies API requests to the server on the deliberately non-standard port `43729`.
+## Harlem and Synology
 
-Do not commit real configuration or credentials. Repository-local secret files, when explicitly required, belong only under the ignored uppercase `SECRETS/` directory.
+Drone is the production deployment path. A push to `main` verifies the repository on Harlem, builds and pushes an immutable commit-tagged image, applies Compose and verifies the exact commit and writable storage at `/api/health`.
 
-## Verification
+- Local SQLite and provider session: `/home/ronny/docker/f1tv-dl-webui/data` → `/app/data`.
+- Media: Synology `192.168.0.15:/volume2/Homelab-workspace/f1tv-dl` → Docker NFS volume `f1tv-dl-media` → `/app/downloads`.
+- Host service port: `43729`.
+
+The NAS directory is also visible on Harlem at `/mnt/homelab-workspace/f1tv-dl`. It must contain `.f1tv-storage-id` with the non-secret identity `f1tv-dl-media-v1`, and allow UID/GID 1000 to write. Compose mounts that export directly with `volume.nocopy`; it never binds a local downloads directory. Docker waits for the NFS mount before starting the application. The application then requires an NFS filesystem, matching identity, write access and sufficient free space before claiming jobs. Failed readiness keeps the durable queue waiting. Storage probes time out after five seconds and never accumulate duplicate blocked probes. Hard NFS mounts retain their kernel-level retry behavior during outages.
+
+Keep the local database off NFS. Back up the local data directory and the deployment encryption key securely. `APP_ENCRYPTION_KEY` must remain stable; Drone supplies it from `F1TV_DL_WEBUI_ENCRYPTION_KEY`. Changing it makes saved credentials unreadable. API responses never return stored account values. The service is designed for the existing trusted LAN/VPN; public hostname and TLS routing are managed outside this repository.
+
+The legacy local media folder is no longer mounted. Existing content is not migrated or imported.
+
+## Explicit fresh start
+
+After confirming the queue has no queued or running jobs, the authorized one-time reset is:
 
 ```sh
-npm run verify
+docker exec f1tv-dl-webui node scripts/reset-library.cjs --confirm-reset-library
 ```
 
-This runs TypeScript checks, unit and API tests, and production builds for the client and server.
+It creates a private SQLite backup under local `data/backups/`, clears job history, catalog cache and preferences, and verifies that the saved encrypted account remains identical. It leaves the local encryption key, provider session and all media files untouched. It never runs automatically on deployment or startup. Refresh the browser afterward.
 
-## Container
-
-The runtime image includes Chromium, FFmpeg, FFprobe, and the pinned `@thedave42/f1tv-dl` CLI. The legacy upstream package references an unpublished scoped FFmpeg wrapper and stale transitive packages. `package.json` reproducibly redirects the wrapper to its compatible public `fluent-ffmpeg` release and pins security-supported transitive versions. The post-install compatibility patch supports F1 TV's current identity-provider redirects, login fields, and iframe cookie consent. It waits for the entitlement cookie across redirects, closes Chromium on failure, and returns sanitized authentication errors. Installation rejects any authentication source other than the exact pinned upstream module, our previous patch, or the current replacement.
-
-Runtime state uses two paths:
-
-- `/app/data` for SQLite and the upstream F1 TV session-token store
-- `/app/downloads` for per-job MP4 files
-
-`APP_ENCRYPTION_KEY` is mandatory. It must be at least 24 characters and should be stable across deployments; changing it makes previously stored credentials unreadable.
-
-The download worker and mobile-conversion worker run independently, so a new F1 TV download can proceed while FFmpeg converts the previous HQ file. On startup, the converter reconciles every completed download tracked in SQLite and creates any missing mobile version. It reuses an existing source only when FFprobe confirms a sub-3-GB, no-more-than-720p H.264/AAC MP4; otherwise it performs a size-bounded two-pass encode.
-
-Each worker fails a child process after five minutes without output. Override the watchdogs with `DOWNLOAD_INACTIVITY_TIMEOUT_MS` and `CONVERSION_INACTIVITY_TIMEOUT_MS` when slower storage or media requires longer intervals.
-
-## Harlem deployment
-
-Drone is the only production deployment path. Pushes to `main` run on the Harlem Linux/AMD64 runner, verify the repository, build an immutable commit-tagged image, push it to `docker-registry.nc:17788/f1tv-dl-webui`, deploy with Compose, and verify the exact commit through `/api/health`.
-
-Production publishes host and container port `43729`. Persistent state lives at:
-
-```text
-/home/ronny/docker/f1tv-dl-webui/data
-/home/ronny/docker/f1tv-dl-webui/downloads
-```
-
-Drone must provide a secret named `F1TV_DL_WEBUI_ENCRYPTION_KEY`. OpenResty hostname and TLS routing are intentionally managed outside this repository.
-
-The service is intended for a trusted LAN/VPN. Do not expose it directly to the public internet: the UI controls account credentials and downloadable media but does not add a second application login.
+See [the approved scope](DOCS/plans/2026-11-19-720p-nfs-redesign.md) for layout and rollout acceptance criteria. The earlier implementation specification is historical where it differs from this policy.

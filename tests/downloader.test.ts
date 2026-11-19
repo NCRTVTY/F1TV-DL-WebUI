@@ -14,9 +14,15 @@ const job: Job = {
   progress: 0,
   message: null,
   outputFile: null,
+  outputSize: null,
   createdAt: "2026-10-10T00:00:00.000Z",
   startedAt: null,
-  finishedAt: null
+  thumbnailUrl: null,
+  eventId: null,
+  season: null,
+  durationSeconds: null,
+  position: 1,
+  finishedAt: null,
 };
 
 describe("f1tv-dl command construction", () => {
@@ -24,12 +30,18 @@ describe("f1tv-dl command construction", () => {
     const args = buildArguments(job, "/downloads/fixture-job");
     expect(args).toEqual([
       job.url,
-      "--format", "mp4",
-      "--video-size", "1920x1080",
-      "--audio-stream", "nld",
-      "--output-directory", "/downloads/fixture-job",
-      "--log-level", "info",
-      "--channel", "INTERNATIONAL"
+      "--format",
+      "mp4",
+      "--video-size",
+      "1280x720",
+      "--audio-stream",
+      "eng",
+      "--output-directory",
+      "/downloads/fixture-job/",
+      "--log-level",
+      "info",
+      "--channel",
+      "F1 LIVE",
     ]);
     expect(args.join(" ")).not.toMatch(/username|password/i);
   });

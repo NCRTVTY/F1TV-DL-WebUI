@@ -12,11 +12,17 @@ services:
       PORT: "43729"
       DATA_DIR: /app/data
       DOWNLOAD_DIR: /app/downloads
+      REQUIRE_NFS: "true"
+      STORAGE_ID: f1tv-dl-media-v1
       DRONE_COMMIT: ${TAG:-development}
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY is required}
     volumes:
       - /home/ronny/docker/f1tv-dl-webui/data:/app/data
-      - /home/ronny/docker/f1tv-dl-webui/downloads:/app/downloads
+      - type: volume
+        source: media
+        target: /app/downloads
+        volume:
+          nocopy: true
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
@@ -25,6 +31,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    stop_grace_period: 30s
     restart: unless-stopped
     healthcheck:
       test:
@@ -33,6 +40,15 @@ services:
         - -e
         - fetch('http://127.0.0.1:43729/api/health').then(async response=>{const body=await response.json();if(!response.ok||!body.ok||body.commit!==process.env.DRONE_COMMIT||!body.storage.writable)process.exit(1)}).catch(()=>process.exit(1))
       interval: 15s
-      timeout: 5s
+      timeout: 8s
       retries: 4
       start_period: 20s
+
+volumes:
+  media:
+    name: f1tv-dl-media
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=192.168.0.15,nfsvers=4.1,rw,hard,timeo=50,retrans=2,rsize=1048576,wsize=1048576
+      device: :/volume2/Homelab-workspace/f1tv-dl

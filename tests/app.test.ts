@@ -23,21 +23,32 @@ function eventReader(response: Response) {
           const block = buffer.slice(0, boundary);
           buffer = buffer.slice(boundary + 2);
           if (!block || block.startsWith(":")) continue;
-          const event = block.split("\n").find((line) => line.startsWith("event: "))?.slice(7) ?? "message";
-          const data = block.split("\n").find((line) => line.startsWith("data: "))?.slice(6) ?? "null";
+          const event =
+            block
+              .split("\n")
+              .find((line) => line.startsWith("event: "))
+              ?.slice(7) ?? "message";
+          const data =
+            block
+              .split("\n")
+              .find((line) => line.startsWith("data: "))
+              ?.slice(6) ?? "null";
           return { event, data: JSON.parse(data) as unknown };
         }
 
         const chunk = await reader.read();
-        if (chunk.done) throw new Error("SSE stream ended before an event arrived");
+        if (chunk.done)
+          throw new Error("SSE stream ended before an event arrived");
         buffer += decoder.decode(chunk.value, { stream: true });
       }
-    }
+    },
   };
 }
 
 async function application(setup?: (root: string) => void) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-app-"));
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-app-")),
+  );
   directories.push(root);
   setup?.(root);
   return buildApp({
@@ -50,13 +61,15 @@ async function application(setup?: (root: string) => void) {
       downloadDir: path.join(root, "downloads"),
       clientDir: path.join(root, "missing-client"),
       encryptionKey: "x".repeat(32),
-      commit: "test-commit"
-    })
+      requireNfs: false,
+      commit: "test-commit",
+    }),
   });
 }
 
 afterEach(() => {
-  for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+  for (const directory of directories.splice(0))
+    fs.rmSync(directory, { recursive: true, force: true });
 });
 
 describe("HTTP API", () => {
@@ -64,28 +77,56 @@ describe("HTTP API", () => {
     const app = await application();
     const response = await app.inject({ method: "GET", url: "/api/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ ok: true, commit: "test-commit", storage: { writable: true } });
+    expect(response.json()).toMatchObject({
+      ok: true,
+      commit: "test-commit",
+      storage: { writable: true },
+    });
     expect(response.body).not.toContain("xxxxxxxx");
     expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
+    expect(response.headers["content-security-policy"]).toContain(
+      "default-src 'self'",
+    );
     await app.close();
   });
 
   it("browses the current F1 season without returning provider URLs", async () => {
     const app = await application();
-    const seasons = await app.inject({ method: "GET", url: "/api/catalog/seasons" });
+    const seasons = await app.inject({
+      method: "GET",
+      url: "/api/catalog/seasons",
+    });
     expect(seasons.statusCode).toBe(200);
     expect(seasons.json().data[0]).toMatchObject({ year: 2026, current: true });
 
-    const events = await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
-    expect(events.json().data[0]).toMatchObject({ id: "p500", country: "Australia" });
+    const events = await app.inject({
+      method: "GET",
+      url: "/api/catalog/seasons/100/events",
+    });
+    expect(events.json().data[0]).toMatchObject({
+      id: "p500",
+      country: "Australia",
+    });
     expect(events.json().data).toHaveLength(4);
-    expect(events.json().data).toEqual(expect.arrayContaining([
-      expect.objectContaining({ country: "Singapore", status: "current", replayAvailable: false }),
-      expect.objectContaining({ country: "United States", status: "future", replayAvailable: false })
-    ]));
+    expect(events.json().data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          country: "Singapore",
+          status: "current",
+          replayAvailable: false,
+        }),
+        expect.objectContaining({
+          country: "United States",
+          status: "future",
+          replayAvailable: false,
+        }),
+      ]),
+    );
 
-    const sessions = await app.inject({ method: "GET", url: "/api/catalog/events/p500/sessions" });
+    const sessions = await app.inject({
+      method: "GET",
+      url: "/api/catalog/events/p500/sessions",
+    });
     expect(sessions.json().data).toHaveLength(1);
     expect(sessions.body).not.toContain("f1tv.formula1.com/detail");
     await app.close();
@@ -93,7 +134,11 @@ describe("HTTP API", () => {
 
   it("requires credentials before a catalog session can be queued", async () => {
     const app = await application();
-    const response = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/catalog/sessions/700/download",
+      payload: { eventId: "p500" },
+    });
     expect(response.statusCode).toBe(409);
     await app.close();
   });
@@ -103,12 +148,16 @@ describe("HTTP API", () => {
     const saved = await app.inject({
       method: "PUT",
       url: "/api/settings/credentials",
-      payload: { username: "fixture-user", password: "fixture-value" }
+      payload: { username: "fixture-user", password: "fixture-value" },
     });
     expect(saved.statusCode).toBe(200);
 
     const settings = await app.inject({ method: "GET", url: "/api/settings" });
-    expect(settings.json()).toEqual({ credentialsConfigured: true, encryptionReady: true, port: 43729, defaultFeed: "F1 LIVE" });
+    expect(settings.json()).toMatchObject({
+      credentialsConfigured: true,
+      encryptionReady: true,
+      policy: { quality: "1280x720", audio: "eng", channel: "F1 LIVE" },
+    });
     expect(settings.body).not.toContain("fixture-user");
     expect(settings.body).not.toContain("fixture-value");
 
@@ -117,79 +166,97 @@ describe("HTTP API", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/catalog/sessions/700/download",
-      payload: { eventId: "p500" }
+      payload: { eventId: "p500" },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json().job).toMatchObject({ contentId: "700", quality: "best", audio: "eng", channel: "F1 LIVE" });
+    expect(created.json().job).toMatchObject({
+      contentId: "700",
+      quality: "1280x720",
+      audio: "eng",
+      channel: "F1 LIVE",
+    });
     const id = created.json().job.id as string;
 
-    const duplicate = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
+    const duplicate = await app.inject({
+      method: "POST",
+      url: "/api/catalog/sessions/700/download",
+      payload: { eventId: "p500" },
+    });
     expect(duplicate.statusCode).toBe(409);
 
     const listed = await app.inject({ method: "GET", url: "/api/jobs" });
     expect(listed.json().jobs).toHaveLength(1);
 
-    const cancelled = await app.inject({ method: "POST", url: `/api/jobs/${id}/cancel` });
+    const cancelled = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${id}/cancel`,
+    });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().job.status).toBe("cancelled");
 
-    const cancelledAgain = await app.inject({ method: "POST", url: `/api/jobs/${id}/cancel` });
+    const cancelledAgain = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${id}/cancel`,
+    });
     expect(cancelledAgain.statusCode).toBe(200);
     expect(cancelledAgain.json().job.status).toBe("cancelled");
 
-    const requeued = await app.inject({ method: "POST", url: "/api/catalog/sessions/700/download", payload: { eventId: "p500" } });
+    const requeued = await app.inject({
+      method: "POST",
+      url: "/api/catalog/sessions/700/download",
+      payload: { eventId: "p500" },
+    });
     expect(requeued.statusCode).toBe(201);
-    expect(requeued.json().job).toMatchObject({ contentId: "700", status: "queued" });
+    expect(requeued.json().job).toMatchObject({
+      contentId: "700",
+      status: "queued",
+    });
     expect(requeued.json().job.id).not.toBe(id);
     await app.close();
   });
 
-  it("changes the default feed and updates queued jobs", async () => {
+  it("persists queue pause and omits the removed feed preference endpoint", async () => {
     const app = await application();
-    await app.inject({
-      method: "PUT",
-      url: "/api/settings/credentials",
-      payload: { username: "fixture-user", password: "fixture-value" }
-    });
-    const selected = await app.inject({
-      method: "PUT",
-      url: "/api/settings/default-feed",
-      payload: { defaultFeed: "INTERNATIONAL" }
-    });
-    expect(selected.statusCode).toBe(200);
-    expect(selected.json()).toEqual({ defaultFeed: "INTERNATIONAL", updatedJobs: 0 });
-
-    await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/catalog/sessions/700/download",
-      payload: { eventId: "p500" }
-    });
-    expect(created.json().job.channel).toBe("INTERNATIONAL");
-
-    const changed = await app.inject({
-      method: "PUT",
-      url: "/api/settings/default-feed",
-      payload: { defaultFeed: "F1 LIVE" }
-    });
-    expect(changed.json()).toEqual({ defaultFeed: "F1 LIVE", updatedJobs: 1 });
-    const jobs = await app.inject({ method: "GET", url: "/api/jobs" });
-    expect(jobs.json().jobs[0].channel).toBe("F1 LIVE");
-
-    const invalid = await app.inject({
-      method: "PUT",
-      url: "/api/settings/default-feed",
-      payload: { defaultFeed: "TRACKSIDE" }
-    });
-    expect(invalid.statusCode).toBe(400);
-    const settings = await app.inject({ method: "GET", url: "/api/settings" });
-    expect(settings.json().defaultFeed).toBe("F1 LIVE");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/queue",
+          payload: { paused: true },
+        })
+      ).json(),
+    ).toEqual({ paused: true });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/settings" })).json().paused,
+    ).toBe(true);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/settings/default-feed",
+          payload: {},
+        })
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/queue",
+          payload: { paused: "yes" },
+        })
+      ).statusCode,
+    ).toBe(400);
     await app.close();
   });
 
   it("does not expose the legacy URL submission route", async () => {
     const app = await application();
-    const response = await app.inject({ method: "POST", url: "/api/jobs", payload: { url: "https://example.com/detail/100" } });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/jobs",
+      payload: { url: "https://example.com/detail/100" },
+    });
     expect(response.statusCode).toBe(404);
     await app.close();
   });
@@ -199,21 +266,27 @@ describe("HTTP API", () => {
     await app.inject({
       method: "PUT",
       url: "/api/settings/credentials",
-      payload: { username: "fixture-user", password: "fixture-value" }
+      payload: { username: "fixture-user", password: "fixture-value" },
     });
     await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
     const created = await app.inject({
       method: "POST",
       url: "/api/catalog/sessions/700/download",
-      payload: { eventId: "p500" }
+      payload: { eventId: "p500" },
     });
     const job = created.json().job;
 
-    const found = await app.inject({ method: "GET", url: `/api/jobs/${job.id}` });
+    const found = await app.inject({
+      method: "GET",
+      url: `/api/jobs/${job.id}`,
+    });
     expect(found.statusCode).toBe(200);
     expect(found.json().job).toMatchObject({ id: job.id, status: "queued" });
 
-    const missing = await app.inject({ method: "GET", url: "/api/jobs/not-present" });
+    const missing = await app.inject({
+      method: "GET",
+      url: "/api/jobs/not-present",
+    });
     expect(missing.statusCode).toBe(404);
     await app.close();
   });
@@ -224,19 +297,41 @@ describe("HTTP API", () => {
     let downloadRoot = "";
     const app = await application((root) => {
       downloadRoot = path.join(root, "downloads");
-      const db = new AppDatabase(path.join(root, "data", "f1tv-dl-webui.sqlite"));
+      const db = new AppDatabase(
+        path.join(root, "data", "f1tv-dl-webui.sqlite"),
+      );
 
-      const running = db.createJob({ url: "https://f1tv.formula1.com/detail/1/running", quality: "best", audio: "eng" });
+      const running = db.createJob({
+        url: "https://f1tv.formula1.com/detail/1/running",
+        quality: "best",
+        audio: "eng",
+      });
       db.claimNext();
-      const failed = db.createJob({ url: "https://f1tv.formula1.com/detail/2/failed", quality: "best", audio: "eng" });
+      const failed = db.createJob({
+        url: "https://f1tv.formula1.com/detail/2/failed",
+        quality: "best",
+        audio: "eng",
+      });
       db.claimNext();
       db.failJob(failed.id, "Fixture failure");
-      const cancelled = db.createJob({ url: "https://f1tv.formula1.com/detail/3/cancelled", quality: "best", audio: "eng" });
+      const cancelled = db.createJob({
+        url: "https://f1tv.formula1.com/detail/3/cancelled",
+        quality: "best",
+        audio: "eng",
+      });
       db.cancelJob(cancelled.id);
-      const completed = db.createJob({ url: "https://f1tv.formula1.com/detail/4/completed", quality: "best", audio: "eng" });
+      const completed = db.createJob({
+        url: "https://f1tv.formula1.com/detail/4/completed",
+        quality: "best",
+        audio: "eng",
+      });
       db.claimNext();
       db.completeJob(completed.id, `${completed.id}/race.mp4`);
-      const queued = db.createJob({ url: "https://f1tv.formula1.com/detail/5/queued", quality: "best", audio: "eng" });
+      const queued = db.createJob({
+        url: "https://f1tv.formula1.com/detail/5/queued",
+        quality: "best",
+        audio: "eng",
+      });
 
       completedId = completed.id;
       jobIds.push(running.id, failed.id, cancelled.id, completed.id, queued.id);
@@ -249,15 +344,25 @@ describe("HTTP API", () => {
     });
 
     for (const id of jobIds) {
-      const response = await app.inject({ method: "DELETE", url: `/api/jobs/${id}` });
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/api/jobs/${id}`,
+      });
       expect(response.statusCode).toBe(204);
     }
 
     const listed = await app.inject({ method: "GET", url: "/api/jobs" });
     expect(listed.json().jobs).toEqual([]);
-    for (const id of jobIds) expect(fs.existsSync(path.join(downloadRoot, id))).toBe(false);
-    expect((await app.inject({ method: "DELETE", url: `/api/jobs/${completedId}` })).statusCode).toBe(204);
-    expect((await app.inject({ method: "DELETE", url: "/api/jobs/not-a-uuid" })).statusCode).toBe(400);
+    for (const id of jobIds)
+      expect(fs.existsSync(path.join(downloadRoot, id))).toBe(false);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/jobs/${completedId}` }))
+        .statusCode,
+    ).toBe(204);
+    expect(
+      (await app.inject({ method: "DELETE", url: "/api/jobs/not-a-uuid" }))
+        .statusCode,
+    ).toBe(400);
     await app.close();
   });
 
@@ -269,19 +374,28 @@ describe("HTTP API", () => {
     await app.inject({
       method: "PUT",
       url: "/api/settings/credentials",
-      payload: { username: "fixture-user", password: "fixture-value" }
+      payload: { username: "fixture-user", password: "fixture-value" },
     });
     await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
     const created = await app.inject({
       method: "POST",
       url: "/api/catalog/sessions/700/download",
-      payload: { eventId: "p500" }
+      payload: { eventId: "p500" },
     });
     const jobId = created.json().job.id as string;
 
-    expect((await app.inject({ method: "DELETE", url: `/api/jobs/${jobId}` })).statusCode).toBe(204);
-    expect(await events.next()).toEqual({ event: "job-removed", data: { jobId } });
-    expect((await app.inject({ method: "GET", url: `/api/jobs/${jobId}` })).statusCode).toBe(404);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/jobs/${jobId}` }))
+        .statusCode,
+    ).toBe(204);
+    expect(await events.next()).toEqual({
+      event: "job-removed",
+      data: { jobId },
+    });
+    expect(
+      (await app.inject({ method: "GET", url: `/api/jobs/${jobId}` }))
+        .statusCode,
+    ).toBe(404);
 
     await events.cancel();
     await app.close();
@@ -293,99 +407,146 @@ describe("HTTP API", () => {
     const response = await fetch(`${address}/api/jobs/events`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
-    expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
+    expect(response.headers.get("cache-control")).toBe(
+      "no-cache, no-transform",
+    );
     expect(response.headers.get("x-accel-buffering")).toBe("no");
     const events = eventReader(response);
 
     await app.inject({
       method: "PUT",
       url: "/api/settings/credentials",
-      payload: { username: "fixture-user", password: "fixture-value" }
+      payload: { username: "fixture-user", password: "fixture-value" },
     });
     await app.inject({ method: "GET", url: "/api/catalog/seasons/100/events" });
     const created = await app.inject({
       method: "POST",
       url: "/api/catalog/sessions/700/download",
-      payload: { eventId: "p500" }
+      payload: { eventId: "p500" },
     });
     const jobId = created.json().job.id as string;
-    const cancelled = await app.inject({ method: "POST", url: `/api/jobs/${jobId}/cancel` });
+    const cancelled = await app.inject({
+      method: "POST",
+      url: `/api/jobs/${jobId}/cancel`,
+    });
     expect(cancelled.statusCode).toBe(200);
 
     const update = await events.next();
     expect(update).toEqual({ event: "job-update", data: { jobId } });
     expect(JSON.stringify(update.data)).not.toContain("formula1.com");
 
-    const current = await app.inject({ method: "GET", url: `/api/jobs/${jobId}` });
-    expect(current.json().job).toMatchObject({ id: jobId, status: "cancelled", message: "Cancelled" });
+    const current = await app.inject({
+      method: "GET",
+      url: `/api/jobs/${jobId}`,
+    });
+    expect(current.json().job).toMatchObject({
+      id: jobId,
+      status: "cancelled",
+      message: "Cancelled",
+    });
 
     await events.cancel();
     await app.close();
   });
 
-  it("reports exact HQ/LQ sizes and serves only validated file variants with ranges", async () => {
+  it("serves one MP4 with exact size, seek ranges, and a browser attachment", async () => {
     let jobId = "";
-    const hq = Buffer.from("high quality fixture media");
-    const lq = Buffer.from("mobile fixture media");
+    const media = Buffer.from("native fixture media");
     const app = await application((root) => {
-      const db = new AppDatabase(path.join(root, "data", "f1tv-dl-webui.sqlite"));
-      const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/files", quality: "best", audio: "eng", title: "Fixture Race" });
-      jobId = job.id;
+      const db = new AppDatabase(
+        path.join(root, "data", "f1tv-dl-webui.sqlite"),
+      );
+      const j = db.createJob({
+        url: "https://f1tv.formula1.com/detail/1/replay",
+      });
+      jobId = j.id;
       db.claimNext();
-      const directory = path.join(root, "downloads", job.id);
-      fs.mkdirSync(directory, { recursive: true });
-      fs.writeFileSync(path.join(directory, "race.mp4"), hq);
-      fs.writeFileSync(path.join(directory, "race-720p-mobile.mp4"), lq);
-      db.completeJob(job.id, `${job.id}/race.mp4`);
-      db.completeConversion(job.id, `${job.id}/race-720p-mobile.mp4`, lq.length, false);
+      const dir = path.join(root, "downloads", j.id);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "replay.mp4"), media);
+      db.completeJob(j.id, j.id + "/replay.mp4", media.length);
       db.close();
     });
-
-    const jobs = await app.inject({ method: "GET", url: "/api/jobs" });
-    expect(jobs.json().jobs[0]).toMatchObject({
-      id: jobId,
-      files: {
-        hq: { available: true, size: hq.length },
-        lq: { available: true, size: lq.length, status: "completed", sourceReused: false }
-      }
+    const listed = (
+      await app.inject({ method: "GET", url: "/api/jobs" })
+    ).json();
+    expect(listed.jobs[0]).toMatchObject({
+      file: { available: true, size: media.length },
     });
-
+    expect(listed.jobs[0].files).toBeUndefined();
     const partial = await app.inject({
       method: "GET",
-      url: `/api/downloads/${jobId}/file?variant=lq&download=1`,
-      headers: { range: "bytes=0-5" }
+      url: "/api/downloads/" + jobId + "/file?download=1",
+      headers: { range: "bytes=0-5" },
     });
     expect(partial.statusCode).toBe(206);
-    expect(partial.body).toBe("mobile");
-    expect(partial.headers["content-range"]).toBe(`bytes 0-5/${lq.length}`);
-    expect(partial.headers["content-disposition"]).toContain("race-720p-mobile.mp4");
-
-    const invalid = await app.inject({ method: "GET", url: `/api/downloads/${jobId}/file?variant=source` });
-    expect(invalid.statusCode).toBe(400);
+    expect(partial.body).toBe("native");
+    expect(partial.headers["content-range"]).toBe("bytes 0-5/" + media.length);
+    expect(partial.headers["content-disposition"]).toContain("attachment");
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/downloads/" + jobId + "/file",
+          headers: { range: "bytes=999-" },
+        })
+      ).statusCode,
+    ).toBe(416);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/downloads/" + jobId + "/lq/retry",
+        })
+      ).statusCode,
+    ).toBe(404);
     await app.close();
   });
-
-  it("requeues a failed LQ conversion without affecting the completed HQ download", async () => {
-    let jobId = "";
+  it("retries failed work and moves queued work without duplicating rows", async () => {
+    let jobId = "",
+      nextId = "";
     const app = await application((root) => {
-      const db = new AppDatabase(path.join(root, "data", "f1tv-dl-webui.sqlite"));
-      const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/retry", quality: "best", audio: "eng" });
-      jobId = job.id;
+      const db = new AppDatabase(
+        path.join(root, "data", "f1tv-dl-webui.sqlite"),
+      );
+      const j = db.createJob({
+        url: "https://f1tv.formula1.com/detail/1/replay",
+      });
+      jobId = j.id;
       db.claimNext();
-      const directory = path.join(root, "downloads", job.id);
-      fs.mkdirSync(directory, { recursive: true });
-      fs.writeFileSync(path.join(directory, "race.mp4"), "hq fixture");
-      db.completeJob(job.id, `${job.id}/race.mp4`);
-      db.claimNextConversion();
-      db.failConversion(job.id, "Fixture conversion failure");
+      db.failJob(j.id, "Provider unavailable");
+      nextId = db.createJob({
+        url: "https://f1tv.formula1.com/detail/2/replay",
+      }).id;
       db.close();
     });
-
-    const retried = await app.inject({ method: "POST", url: `/api/downloads/${jobId}/lq/retry` });
-    expect(retried.statusCode).toBe(200);
-    expect(retried.json().job).toMatchObject({ status: "completed", files: { lq: { status: "queued", progress: 0 } } });
-    const repeated = await app.inject({ method: "POST", url: `/api/downloads/${jobId}/lq/retry` });
-    expect(repeated.statusCode).toBe(409);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/jobs/" + jobId + "/retry",
+        })
+      ).json().job.status,
+    ).toBe("queued");
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/jobs/" + jobId + "/retry",
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/jobs/" + nextId + "/move-up",
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/jobs" })).json().jobs,
+    ).toHaveLength(2);
     await app.close();
   });
 });

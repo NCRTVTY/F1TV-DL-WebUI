@@ -27,6 +27,7 @@ steps:
     environment:
       PUPPETEER_SKIP_DOWNLOAD: "true"
     commands:
+      - apt-get update && apt-get install -y --no-install-recommends ffmpeg
       - npm ci --no-audit --no-fund
       - npm run verify
 
@@ -57,7 +58,7 @@ steps:
         from_secret: F1TV_DL_WEBUI_ENCRYPTION_KEY
     commands:
       - docker compose -f ./docker-compose.yml config -q
-      - docker run --rm -v /home/ronny/docker/f1tv-dl-webui:/state alpine:3.21 sh -eu -c "mkdir -p /state/data/f1tv-home /state/downloads && chown -R 1000:1000 /state/data /state/downloads"
+      - docker run --rm -v /home/ronny/docker/f1tv-dl-webui:/state alpine:3.21 sh -eu -c "mkdir -p /state/data/f1tv-home && chown -R 1000:1000 /state/data && chmod 700 /state/data /state/data/f1tv-home"
       - docker compose -f ./docker-compose.yml pull
       - docker compose -f ./docker-compose.yml up -d --remove-orphans
       - |

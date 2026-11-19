@@ -2,164 +2,86 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AppDatabase } from "../src/server/database";
-
-const directories: string[] = [];
-
-function database(): AppDatabase {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-db-"));
-  directories.push(directory);
-  return new AppDatabase(path.join(directory, "test.sqlite"));
+import { AppDatabase, downloadPolicy } from "../src/server/database";
+const roots: string[] = [];
+function fixture() {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-db-")),
+  );
+  roots.push(root);
+  const file = path.join(root, "state.sqlite");
+  return { file, db: new AppDatabase(file) };
 }
-
+const input = { url: "https://f1tv.formula1.com/detail/1/replay" };
 afterEach(() => {
-  for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+  for (const r of roots.splice(0))
+    fs.rmSync(r, { recursive: true, force: true });
 });
-
-describe("durable queue", () => {
-  it("defaults to F1 LIVE and migrates existing queued jobs on startup", () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-db-"));
-    directories.push(directory);
-    const filename = path.join(directory, "test.sqlite");
-    let db = new AppDatabase(filename);
-    expect(db.getDefaultFeed()).toBe("F1 LIVE");
-
-    const running = db.createJob({ url: "https://f1tv.formula1.com/detail/1/running", quality: "best", audio: "eng", channel: "INTERNATIONAL" });
-    db.claimNext();
-    const queued = db.createJob({ url: "https://f1tv.formula1.com/detail/2/queued", quality: "best", audio: "eng", channel: "INTERNATIONAL" });
-    db.close();
-
-    db = new AppDatabase(filename);
-    expect(db.getJob(queued.id)?.channel).toBe("F1 LIVE");
-    expect(db.getJob(running.id)?.channel).toBe("INTERNATIONAL");
+describe("durable download queue", () => {
+  it("enforces the fixed policy even when callers supply conflicting preferences", () => {
+    const { db } = fixture();
+    expect(
+      db.createJob({
+        ...input,
+        quality: "best",
+        audio: "spa",
+        channel: "INTERNATIONAL",
+      }),
+    ).toMatchObject(downloadPolicy);
     db.close();
   });
-
-  it("changes the default feed and updates only queued jobs", () => {
-    const db = database();
-    const completed = db.createJob({ url: "https://f1tv.formula1.com/detail/1/completed", quality: "best", audio: "eng", channel: "F1 LIVE" });
-    db.claimNext();
-    db.completeJob(completed.id, `${completed.id}/completed.mp4`);
-    const running = db.createJob({ url: "https://f1tv.formula1.com/detail/2/running", quality: "best", audio: "eng", channel: "F1 LIVE" });
-    db.claimNext();
-    const queued = db.createJob({ url: "https://f1tv.formula1.com/detail/3/queued", quality: "best", audio: "eng", channel: "F1 LIVE" });
-    const cancelled = db.createJob({ url: "https://f1tv.formula1.com/detail/4/cancelled", quality: "best", audio: "eng", channel: "F1 LIVE" });
-    db.cancelJob(cancelled.id);
-
-    expect(db.setDefaultFeed("INTERNATIONAL")).toBe(1);
-    expect(db.getDefaultFeed()).toBe("INTERNATIONAL");
-    expect(db.getJob(queued.id)?.channel).toBe("INTERNATIONAL");
-    expect(db.getJob(completed.id)?.channel).toBe("F1 LIVE");
-    expect(db.getJob(running.id)?.channel).toBe("F1 LIVE");
-    expect(db.getJob(cancelled.id)?.channel).toBe("F1 LIVE");
+  it("preserves pause, settings and ordering across restarts; recovers interrupted work", () => {
+    let { file, db } = fixture();
+    const first = db.createJob(input),
+      second = db.createJob(input);
+    expect(db.moveUp(second.id)).toBe(true);
+    expect(db.claimNext()?.id).toBe(second.id);
+    db.updateProgress(second.id, 42, "Downloading");
+    db.setPaused(true);
+    db.setSetting("catalog-test", "retained");
     db.close();
-  });
-
-  it("claims jobs in creation order and records completion", () => {
-    const db = database();
-    const first = db.createJob({ url: "https://f1tv.formula1.com/detail/1/first", quality: "best", audio: "eng" });
-    db.createJob({ url: "https://f1tv.formula1.com/detail/2/second", quality: "1280x720", audio: "nld" });
-
-    expect(db.claimNext()?.id).toBe(first.id);
-    db.updateProgress(first.id, 44, "Downloading · 44%");
-    db.completeJob(first.id, `${first.id}/first.mp4`);
-    expect(db.getJob(first.id)).toMatchObject({ status: "completed", progress: 100 });
-    db.close();
-  });
-
-  it("returns interrupted jobs to the queue", () => {
-    const db = database();
-    const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/recovery", quality: "best", audio: "eng" });
-    db.claimNext();
+    db = new AppDatabase(file);
     expect(db.recoverInterrupted()).toBe(1);
-    expect(db.getJob(job.id)).toMatchObject({ status: "queued", message: "Recovered after restart" });
-    db.close();
-  });
-
-  it("notifies subscribers after each successful job mutation", () => {
-    const db = database();
-    const changed: string[] = [];
-    const unsubscribe = db.onJobChanged((jobId) => changed.push(jobId));
-    const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/events", quality: "best", audio: "eng" });
-
-    db.claimNext();
-    db.updateProgress(job.id, 27, "Downloading · 27%");
-    db.completeJob(job.id, `${job.id}/race.mp4`);
-    db.updateProgress(job.id, 50, "Too late");
-    expect(db.cancelJob(job.id)).toBe(false);
-
-    expect(changed).toEqual([job.id, job.id, job.id, job.id]);
-    unsubscribe();
-    db.close();
-  });
-
-  it("hard-deletes a job, cascades its conversion, and notifies removal subscribers", () => {
-    const db = database();
-    const removed: string[] = [];
-    const unsubscribe = db.onJobRemoved((jobId) => removed.push(jobId));
-    const job = db.createJob({ url: "https://f1tv.formula1.com/detail/1/remove", quality: "best", audio: "eng" });
-    db.claimNext();
-    db.completeJob(job.id, `${job.id}/race.mp4`);
-
-    expect(db.getConversionJob(job.id)).not.toBeNull();
-    expect(db.deleteJob(job.id)).toBe(true);
-    expect(db.deleteJob(job.id)).toBe(false);
-    expect(db.getJob(job.id)).toBeNull();
-    expect(db.getConversionJob(job.id)).toBeNull();
-    expect(removed).toEqual([job.id]);
-
-    unsubscribe();
-    db.close();
-  });
-});
-
-describe("durable conversion queue", () => {
-  it("creates and claims a conversion independently when a download completes", () => {
-    const db = database();
-    const download = db.createJob({ url: "https://f1tv.formula1.com/detail/1/mobile", quality: "best", audio: "eng" });
-    db.claimNext();
-    db.completeJob(download.id, `${download.id}/race.mp4`);
-
-    expect(db.getConversionJob(download.id)).toMatchObject({ status: "queued", progress: 0 });
-    expect(db.claimNextConversion()).toMatchObject({ downloadJobId: download.id, status: "running" });
+    expect(db.paused).toBe(true);
     expect(db.claimNext()).toBeNull();
-
-    db.updateConversionProgress(download.id, 55, "Creating 720p MP4");
-    db.completeConversion(download.id, `${download.id}/race-720p-mobile.mp4`, 2_500_000_000, false);
-    expect(db.getConversionJob(download.id)).toMatchObject({
-      status: "completed",
-      progress: 100,
-      outputSize: 2_500_000_000,
-      sourceReused: false
-    });
+    expect(db.getSetting("catalog-test")).toBe("retained");
+    db.setPaused(false);
+    expect(db.claimNext()?.id).toBe(second.id);
+    db.completeJob(second.id, second.id + "/replay.mp4");
+    expect(db.claimNext()?.id).toBe(first.id);
     db.close();
   });
-
-  it("recovers interrupted conversions and retries only failed work", () => {
-    const db = database();
-    const download = db.createJob({ url: "https://f1tv.formula1.com/detail/1/recovery", quality: "best", audio: "eng" });
+  it("retries failures and cancellation while protecting completed and deleted jobs", () => {
+    const { db } = fixture();
+    const j = db.createJob(input);
     db.claimNext();
-    db.completeJob(download.id, `${download.id}/race.mp4`);
-    db.claimNextConversion();
-
-    expect(db.recoverInterruptedConversions()).toBe(1);
-    expect(db.getConversionJob(download.id)).toMatchObject({ status: "queued", message: "Recovered after restart" });
-    expect(db.retryConversion(download.id)).toBe(false);
-
-    db.claimNextConversion();
-    db.failConversion(download.id, "Fixture conversion failure");
-    expect(db.retryConversion(download.id)).toBe(true);
-    expect(db.getConversionJob(download.id)).toMatchObject({ status: "queued", message: "Retry queued" });
+    db.failJob(j.id, "Unavailable");
+    expect(db.retryJob(j.id)).toBe(true);
+    db.claimNext();
+    db.completeJob(j.id, j.id + "/replay.mp4");
+    expect(db.retryJob(j.id)).toBe(false);
+    db.updateProgress(j.id, 20, "Too late");
+    expect(db.getJob(j.id)?.progress).toBe(100);
+    expect(db.cancelJob(j.id)).toBe(false);
+    const other = db.createJob(input);
+    db.cancelJob(other.id);
+    expect(db.retryJob(other.id)).toBe(true);
+    db.deleteJob(other.id);
+    expect(db.retryJob(other.id)).toBe(false);
     db.close();
   });
-
-  it("reconciles conversion jobs for earlier completed downloads", () => {
-    const db = database();
-    const download = db.createJob({ url: "https://f1tv.formula1.com/detail/1/legacy", quality: "best", audio: "eng" });
-    db.claimNext();
-    db.completeJob(download.id, `${download.id}/race.mp4`);
-    expect(db.ensureConversionJobs()).toEqual([]);
-    expect(db.listConversionJobs()).toHaveLength(1);
+  it("holds durable deletion requests out of the worker and publishes removal events", () => {
+    const { db } = fixture();
+    const j = db.createJob(input);
+    const removed: string[] = [];
+    db.onJobRemoved((id) => removed.push(id));
+    db.requestDeletion(j.id);
+    expect(db.claimNext()).toBeNull();
+    expect(db.pendingDeletions()).toEqual([j.id]);
+    db.deleteJob(j.id);
+    expect(removed).toEqual([j.id]);
+    db.finishDeletion(j.id);
+    expect(db.pendingDeletions()).toEqual([]);
     db.close();
   });
 });
