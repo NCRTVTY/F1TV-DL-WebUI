@@ -458,6 +458,7 @@ describe("HTTP API", () => {
       );
       const j = db.createJob({
         url: "https://f1tv.formula1.com/detail/1/replay",
+        title: "2026 São Paulo GP",
       });
       jobId = j.id;
       db.claimNext();
@@ -483,6 +484,9 @@ describe("HTTP API", () => {
     expect(partial.body).toBe("native");
     expect(partial.headers["content-range"]).toBe("bytes 0-5/" + media.length);
     expect(partial.headers["content-disposition"]).toContain("attachment");
+    expect(
+      decodeURIComponent(partial.headers["content-disposition"] as string),
+    ).toContain("2026 São Paulo GP - 720p.mp4");
     expect(
       (
         await app.inject({
@@ -511,6 +515,7 @@ describe("HTTP API", () => {
       );
       const j = db.createJob({
         url: "https://f1tv.formula1.com/detail/1/replay",
+        title: "2026 São Paulo GP",
       });
       jobId = j.id;
       db.claimNext();

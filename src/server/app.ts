@@ -453,9 +453,16 @@ export async function buildApp({
       reply.header("Content-Type", "video/mp4");
       const disposition =
         request.query.download === "1" ? "attachment" : "inline";
+      const replayName =
+        (job.title || "F1TV replay")
+          .replace(/[^\p{L}\p{N} ._-]/gu, "")
+          .replace(/\s+/g, " ")
+          .replace(/^\.+/, "")
+          .trim()
+          .slice(0, 140) || "F1TV replay";
       reply.header(
         "Content-Disposition",
-        `${disposition}; filename*=UTF-8''${encodeURIComponent(metadata.name)}`,
+        `${disposition}; filename*=UTF-8''${encodeURIComponent(replayName + " - 720p.mp4")}`,
       );
 
       try {
