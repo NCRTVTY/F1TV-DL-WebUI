@@ -29,8 +29,8 @@ const changes = {
       "        throw new Error('F1 LIVE feed is unavailable for this replay');",
     ],
     [
-      "        let channelId = (stream.playbackUrl",
-      "        if (!stream || String(stream.title).trim().toUpperCase() !== 'F1 LIVE') throw new Error('F1 LIVE feed is unavailable for this replay');\n        let channelId = (stream.playbackUrl",
+      "        let channelId = (stream.playbackUrl !== null && stream.playbackUrl.indexOf('channelId') == -1) ? null : stream.channelId;",
+      "        if (!stream || String(stream.title).trim().toUpperCase() !== 'F1 LIVE') throw new Error('F1 LIVE feed is unavailable for this replay');\n        const channelId = stream.channelId;\n        if (!['number', 'string'].includes(typeof channelId) || !String(channelId).trim()) throw new Error('F1 LIVE feed is unavailable for this replay');",
     ],
     [
       "        const plDetails = await getProgramStreamId(f1tvUrl, audioStream, videoSize);",

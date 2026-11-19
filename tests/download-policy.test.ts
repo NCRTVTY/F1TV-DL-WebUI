@@ -52,7 +52,13 @@ describe("pinned native download policy", () => {
         name: string,
       ) => streams.find((s) => s.title === name),
     });
-    for (const streams of [null, [], [{ title: "INTERNATIONAL" }]])
+    for (const streams of [
+      null,
+      [],
+      [{ title: "INTERNATIONAL" }],
+      [{ title: "F1 LIVE", playbackUrl: "?channelId=7" }],
+      [{ title: "F1 LIVE", channelId: null, playbackUrl: null }],
+    ])
       await expect(
         select(
           "",
@@ -68,7 +74,7 @@ describe("pinned native download policy", () => {
           id: 1,
           metadata: {
             additionalStreams: [
-              { title: "F1 LIVE", channelId: 7, playbackUrl: "?channelId=7" },
+              { title: "F1 LIVE", channelId: 7, playbackUrl: "replay" },
             ],
           },
         },

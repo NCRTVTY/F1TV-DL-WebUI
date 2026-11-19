@@ -13,13 +13,11 @@ RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim AS runtime
 
-ARG DRONE_COMMIT=development
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=43729 \
     DATA_DIR=/app/data \
     DOWNLOAD_DIR=/app/downloads \
-    DRONE_COMMIT=${DRONE_COMMIT} \
     HOME=/app/data/f1tv-home \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     PUPPETEER_SKIP_DOWNLOAD=true
@@ -36,6 +34,9 @@ COPY scripts/reset-library.cjs ./scripts/reset-library.cjs
 
 RUN mkdir -p /app/data/f1tv-home /app/downloads \
     && chown -R node:node /app/data /app/downloads
+
+ARG DRONE_COMMIT=development
+ENV DRONE_COMMIT=${DRONE_COMMIT}
 
 USER node
 EXPOSE 43729
