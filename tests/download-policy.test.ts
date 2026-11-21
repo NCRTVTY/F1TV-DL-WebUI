@@ -144,4 +144,21 @@ describe("pinned native download policy", () => {
       "Native 720p video is unavailable",
     );
   });
+  it("selects the explicitly English HLS track instead of the default effects-only track", async () => {
+    const source = patchDownloadSource(fixture("api"), "api");
+    const section = source.slice(source.indexOf("const getProgramStreamId ="), source.indexOf("const saveF1tvToken ="));
+    let language = "en";
+    const select = vm.runInNewContext(section + "\ngetProgramStreamId", {
+      axios: { get: async () => ({ data: `#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="No linguistic content",LANGUAGE="zxx",DEFAULT=YES,AUTOSELECT=YES,URI="effects.m3u8"\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Commentary",LANGUAGE="${language}",DEFAULT=NO,AUTOSELECT=YES,URI="commentary.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,AUDIO="audio"\nvideo.m3u8\n` }) },
+      HLS: require("hls-parser"),
+    });
+    for (const label of ["en", "eng", "en-GB", "en-US"]) {
+      language = label;
+      await expect(select("manifest.m3u8", "eng", "1280x720")).resolves.toMatchObject({ width: 1280, height: 720, videoId: 0, audioId: 1 });
+    }
+    language = "fr";
+    expect((await select("manifest.m3u8", "eng", "1280x720")).audioId).toBe(-1);
+    const oldApi = source.replace("if (a.language === lang || (lang === 'eng' && /^en(?:[-_][a-z0-9]+)*$/i.test(a.language || ''))) {", "if (a.language == lang) {");
+    expect(patchDownloadSource(oldApi, "api")).toBe(source);
+  });
 });

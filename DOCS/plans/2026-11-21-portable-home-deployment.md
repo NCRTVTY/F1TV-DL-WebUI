@@ -53,3 +53,18 @@ with type `nfs`, device `:/volume2/Homelab-workspace/f1tv-dl`, and options
    the Synology export through both container and host paths. Record the result.
 
 Do not reset the library, migrate media, rotate the home key or publish the repo.
+
+## Archive integration finding
+
+The first real Brazil 2012 request authenticated successfully but exposed an HLS
+compatibility issue: its 1280×720 variant labels English as `en`, while the pinned
+downloader compared only with `eng`. Its first/default audio track is `zxx`
+(effects only); English is the second audio track. Accept explicit English HLS
+language identifiers, never fall back to the default track, and annotate the
+selected English track as `eng` when copying into MP4. A native five-second copy
+confirmed that HLS does not otherwise retain an MP4 audio language tag. Keep the
+full-file language, codec, resolution and duration validation unchanged.
+
+A second native five-second copy with the selected English track and an explicit
+MP4 language tag passed FFprobe checks: 1280×720 H.264, exactly one AAC audio
+track tagged `eng`, without encoding. The full validation suite passes 85 tests.
