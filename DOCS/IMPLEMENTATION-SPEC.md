@@ -6,7 +6,7 @@
 
 ## Status and purpose
 
-Repository: NCRTVTY/F1TV-DL-WebUI (private).
+Repository: NCRTVTY/F1TV-DL-WebUI.
 Owner: Ronny / noCreativity.
 Target host: Manhattan, Ronny's Mac mini; containerized deployment.
 Primary client: an Android tablet, remotely and before flights.

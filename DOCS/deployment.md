@@ -4,6 +4,10 @@ The same Dockerfile and Compose file support local builds and CI. The root
 README's Docker path does not require Drone, a registry account or host Node.js.
 Configure and validate storage before either workflow.
 
+Build your own image from the included Dockerfile. The standard installation is
+`docker compose up -d --build`; it does not depend on a project-provided prebuilt
+image. The registry workflow below is optional for operators running their own CI.
+
 ## Build and run separately
 
 ```sh
@@ -40,13 +44,13 @@ The tracked `.drone.yml` performs these steps for the maintainer's home. Its
 runner selector, registry, data bind, NFS export and port are installation-specific.
 Other operators must adapt those values and supply their own secret store when
 using an externally managed key. They do not need the maintainer's LAN or disks.
-The MIT grant does not grant access to that private infrastructure or account.
+The MIT grant does not grant access to the maintainer's infrastructure or account.
 
 See [home deployment](home-deployment.md) for the existing installation that must
 remain intact. The pipeline backs up SQLite, checks existing mount identities,
 and aborts deployment while downloads are queued/running. Retry it once idle.
 
-Repository visibility stays private. Before distributing any prebuilt image
-publicly, record the exact binary/source package versions and satisfy the source
-and notice obligations in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+If you distribute a prebuilt image to others, record the exact binary/source
+package versions and satisfy the source and notice obligations in
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 A generic upstream source link or project MIT notice alone is not sufficient.

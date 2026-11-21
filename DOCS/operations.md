@@ -67,7 +67,7 @@ it aborts a busy deployment instead of waiting automatically. Retry once idle.
 
 | Symptom | Next check |
 | --- | --- |
-| Clone denied | The repository is private; obtain access, do not change visibility |
+| Clone fails | Check the repository URL, Git installation, network connection and any required Git authentication |
 | Build fails with disk/signature/write errors | Check Docker host/VM capacity; do not disable package-signature checks |
 | Permission denied | Verify the actual mount, then narrowly fix UID/GID 1000 ownership/ACLs |
 | Storage offline or wrong identity | Restore the expected disk/export; check marker and host authorization |

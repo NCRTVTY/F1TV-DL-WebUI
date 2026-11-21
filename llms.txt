@@ -3,7 +3,7 @@
 > Help the user save supported F1 TV replays at home, then save complete MP4s to
 > a travel device for offline viewing on planes, trains or slow connections.
 > Success means durable storage and a verified local offline file, not merely a
-> container that started. Read AGENTS.md as well. Keep this repository private.
+> container that started. Read AGENTS.md as well.
 
 ## Current sources of truth
 
@@ -13,15 +13,15 @@
 - [.env.example](.env.example): non-secret configuration examples.
 - [Storage](DOCS/storage.md): persistence, capacity, permissions, mounted shares and NFS.
 - [Operations](DOCS/operations.md): safe checks, backups, keys, updates and recovery.
-- [Deployment](DOCS/deployment.md): Dockerfile, registry images and optional Drone.
+- [Deployment](DOCS/deployment.md): build your own Docker image and optional Drone/registry workflow.
 - [Scripts](scripts/README.md): what runs automatically and which operation is destructive.
-- [Home deployment](DOCS/home-deployment.md): existing maintainer infrastructure; do not apply its private host values to another user's installation.
+- [Home deployment](DOCS/home-deployment.md): existing maintainer infrastructure; do not apply its installation-specific host values to another user's installation.
 - [License scope](THIRD_PARTY_NOTICES.md): original code is MIT; dependencies and content keep their own terms.
 
 Historical implementation specs and dated plans are background, not current setup
-instructions. Current user instructions take precedence. Do not change repo
-visibility, publish images, reset a library or send credentials anywhere as an
-implied part of helping someone install this app.
+instructions. Current user instructions take precedence. Do not publish images,
+reset a library or send credentials anywhere as an implied part of helping
+someone install this app.
 
 ## Before building or starting anything
 
@@ -158,6 +158,10 @@ an offline PWA. If the agent cannot inspect that device or playback, give the
 user the remaining check and do not claim it was verified.
 
 Offline intent and a subscription do not themselves establish copying rights.
-Keep the README's personal travel framing, the applicable-terms note and license
-scope. Do not present this as an official F1 TV/Netflix service, public replay
+Keep the README's personal travel framing, use-at-your-own-risk disclaimer and
+license scope. Explain that downloading/storing replays may violate F1 TV's terms
+and could lead to account suspension or termination; a disclaimer does not grant
+permission or override those terms. Build locally from the supplied Dockerfile;
+a project-provided prebuilt image is not needed.
+Do not present this as an official F1 TV/Netflix service, public replay
 sharing platform or a guarantee of legal permission to archive content.

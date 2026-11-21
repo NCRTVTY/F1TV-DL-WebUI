@@ -2,14 +2,14 @@
 
 The user authorized MIT if compatible, a beginner documentation/script review,
 an agent-readable setup guide, storage checks/warnings, and travel/offline framing.
-Repository visibility remains private. Existing home mounts, account and library
+Existing home mounts, account and library
 must survive any automatic Drone deployment.
 
 ## Implementation
 
 - Apply MIT to original code/docs, with explicit third-party/media exclusions.
 - Preserve frontend notices in built assets and record exact MPL source commits.
-- Keep binary corresponding-source and image-rights work as public-release gates.
+- Preserve third-party source, attribution and content rights separately from MIT.
 - Lead README with downloading at home and saving to the actual travel device.
 - Distinguish persistent named volumes from disposable container storage.
 - Document actual daemon/VM/media/device capacity and the 2 GB admission floor.
@@ -21,7 +21,7 @@ must survive any automatic Drone deployment.
 
 Check links and script/config examples, generate complete dependency notices,
 run the required verification, inspect generated legal assets and a built image,
-scan staged/history content for secrets, then push privately through the existing
+scan staged/history content for secrets, then push through the existing
 pipeline when idle. Verify the existing four completed files, mount identities
 and served notice files after deployment; do not queue extra replays for this task.
 

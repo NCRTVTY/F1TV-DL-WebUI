@@ -13,6 +13,13 @@ You need your own F1 TV account with access to the replay. Subscription access,
 regional availability and permission to save content are separate matters; the
 software does not bypass unsupported DRM or geographic restrictions.
 
+> **Use at your own risk.** Downloading or storing replays with this tool may
+> violate the [F1 TV subscription terms](https://www.formula1.com/en/information/f1-tv-subscription-terms.384sQqjslhQ2Rhm1LdKgfD),
+> including clause 9.2, and could result in account suspension or termination.
+> You are responsible for your use of the software and compliance with applicable
+> terms and laws. This disclaimer does not grant permission to save or redistribute
+> content or override F1 TV's terms.
+
 ## Before starting
 
 Install Docker Engine with Compose v2, or Docker Desktop. Host Node.js, npm,
@@ -27,8 +34,7 @@ hardware minima or a guarantee that a queue fits. See [storage planning](DOCS/st
 If images, data and media share Docker's disk/VM, add the allowances rather than
 counting the same free bytes twice.
 
-The repository is currently private, so cloning requires repository access. MIT
-licensing does not change its visibility. AI assistants should start with
+AI assistants should start with
 [llms.txt](llms.txt) and the repository's [AGENTS.md](AGENTS.md).
 
 ## Docker Compose quick start
@@ -132,8 +138,10 @@ root `SECRETS/`; production keys can remain in the CI secret store.
 ## Build separately or use Drone
 
 The same Dockerfile builds local and CI images. Drone is optional; see
-[Docker and CI deployment](DOCS/deployment.md) for separate build/run commands,
-registry images and adapting the tracked home pipeline to another server.
+[Docker and CI deployment](DOCS/deployment.md) for separate build/run commands
+and adapting the tracked home pipeline to your own CI and registry.
+Build your own image from the included Dockerfile with
+`docker compose up -d --build`; no project-provided prebuilt image is needed.
 
 ## Download policy
 
@@ -181,14 +189,6 @@ read [third-party notices and license scope](THIRD_PARTY_NOTICES.md). MIT does n
 license broadcasts, Formula 1/Netflix marks or photographs.
 
 This project is intended for a personal offline-viewing workflow, not content
-redistribution or a hosted sharing service. That purpose and a paid subscription
-do not themselves establish permission to save content. The [F1 TV subscription
-terms](https://www.formula1.com/en/information/f1-tv-subscription-terms.384sQqjslhQ2Rhm1LdKgfD)
-restrict copying, downloading and storage except where permitted by law. Check
-the terms and law applicable to your use. Unsupported streams or DRM are not
-bypassed.
-
-The repository stays private. Before public release, resolve bundled image
-rights and history review, upstream notice completeness, and the exact source
-and notice obligations of any prebuilt image being distributed. [Historical
-plans](DOCS/README.md) are not setup guides.
+redistribution or a hosted sharing service. A paid subscription does not itself
+establish permission to save content. See the use-at-your-own-risk disclaimer
+above. [Historical plans](DOCS/README.md) are not setup guides.

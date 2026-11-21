@@ -1,6 +1,6 @@
 # Maintainer home deployment
 
-This is the existing private home installation. New users should follow the root
+This is the maintainer's existing home installation. New users should follow the root
 [README](../README.md); do not copy these host paths, registry or NAS address.
 
 

@@ -10,7 +10,7 @@ trademarks, provider data, broadcasts or downloaded media.
 The pinned dependency graph was reviewed on 2026-11-21. Its declared licenses do
 not require changing the original application to GPL. This is a compatibility
 assessment for the current architecture, not a claim that every bundled item is
-MIT or that all public-release obligations have already been discharged.
+MIT or that third-party redistribution obligations no longer apply.
 
 | Direct runtime dependency | Version | Declared license |
 | --- | --- | --- |
@@ -45,13 +45,19 @@ provide a standalone copyright/license file. The declared terms and provenance
 are recorded in [LICENSES/f1tv-dl-ISC.txt](LICENSES/f1tv-dl-ISC.txt); no missing
 copyright year has been invented.
 
+ISC is a permissive software license: it allows use, modification and
+redistribution while requiring retention of the applicable copyright and license
+notices. It is compatible with licensing the separate, original application code
+under MIT. The missing standalone upstream file is an attribution/documentation
+gap, not a conflicting license or a restriction imposed by F1 TV's service terms.
+
 This attribution also covers upstream-derived material in the authentication
 replacement, patch excerpts and `tests/fixtures/f1tv-token.*.json` and
 `tests/fixtures/download-policy-*.json`. Original local modifications are MIT;
 the underlying upstream material retains its ISC terms. The install-time patches
 change authentication compatibility and native stream selection; they do not
-remove upstream licensing obligations. Before public redistribution, recheck
-upstream notice completeness against the exact source being distributed.
+remove upstream licensing obligations. Preserve the available upstream
+attribution and license terms for the exact source being distributed.
 
 ## MPL components
 
@@ -100,15 +106,18 @@ Before publishing a prebuilt image, record its exact installed binary/source
 package versions and provide the corresponding source, notices and any required
 source offer through a compliant distribution route. Merely linking to a generic
 upstream repository or retaining `/usr/share/doc/` is not a complete substitute
-for those source obligations. A private build is not a public image release.
+for those source obligations. Building an image for your own use is separate
+from distributing that image to others.
 
 ## Imagery, trademarks and saved replays
 
 The project's MIT grant excludes `src/client/assets/race.jpg`, photographic
 content embedded in `DOCS/design/*.html`, provider thumbnails, Formula 1 marks,
 Netflix marks and broadcast/media content. It grants no rights to those items.
-Establish permission or replace/exclude bundled photography before making the
-repository public, including its reachable history. Runtime catalog imagery and
-downloaded replays remain subject to their owners' rights and applicable terms.
+Runtime catalog imagery and downloaded replays remain subject to their owners'
+rights and applicable terms.
 Offline-viewing intent and a paid account do not, by themselves, grant permission
-to copy or redistribute content.
+to copy or redistribute content. Downloading or storing replays may violate
+F1 TV's subscription terms and could result in account suspension or termination.
+Use at your own risk; the README's disclaimer does not grant content rights or
+override those terms.

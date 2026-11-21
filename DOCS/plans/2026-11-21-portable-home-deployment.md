@@ -17,8 +17,8 @@ The user additionally approved the original broadcast for pre-2022 archive races
 Those jobs select the original main feed explicitly; 2022 onward still requires
 F1 LIVE without fallback. Both paths require native 720p and English audio.
 
-Repository visibility stays private. License selection and redistribution rights
-for bundled photography remain publication gates, separate from deployment.
+License selection and redistribution rights for bundled photography are separate
+from deployment.
 
 ## Production baseline
 
@@ -52,7 +52,7 @@ with type `nfs`, device `:/volume2/Homelab-workspace/f1tv-dl`, and options
 8. Browse 2012 season, Brazil, queue the race and verify actual file growth on
    the Synology export through both container and host paths. Record the result.
 
-Do not reset the library, migrate media, rotate the home key or publish the repo.
+Do not reset the library, migrate media or rotate the home key.
 
 ## Archive integration finding
 
