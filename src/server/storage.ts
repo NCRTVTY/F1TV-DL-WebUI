@@ -20,11 +20,13 @@ export class MediaStorage {
     totalBytes: 0,
     enoughSpace: false,
     message: "Checking media storage",
-    location: "Synology / Homelab-workspace / f1tv-dl",
+    location: "Media storage",
   };
   private pending?: Promise<StorageState>;
   private checkedAt = 0;
-  constructor(private readonly config: AppConfig) {}
+  constructor(private readonly config: AppConfig) {
+    this.state.location = config.storageLabel;
+  }
   snapshot(): StorageState {
     return { ...this.state };
   }
@@ -62,9 +64,7 @@ export class MediaStorage {
     return { ...result };
   }
   private async probe(): Promise<StorageState> {
-    const location = this.config.requireNfs
-      ? "Synology / Homelab-workspace / f1tv-dl"
-      : "Local development storage";
+    const location = this.config.storageLabel;
     let probeFile: string | undefined;
     try {
       if (!this.config.requireNfs)
@@ -129,7 +129,7 @@ export class MediaStorage {
     if (!(await this.check()).ready)
       throw Object.assign(
         new Error(
-          "Media storage is unavailable; try again when Synology is connected",
+          "Media storage is unavailable; reconnect the configured storage and try again",
         ),
         { statusCode: 503 },
       );

@@ -4,6 +4,9 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 const digest = (s) => createHash("sha256").update(s).digest("hex");
 const marker = "// F1TV WebUI fixed 720p English F1 LIVE policy\n";
+const legacyIndexHash = "dde4304312c103c99ed7f3f9cd92698e626cbaf1986afe445e4d7f39621750f2";
+const originalGuard = "    let f1tvUrl;\n    log.debug";
+const legacyGuard = "    if (channel !== 'F1 LIVE') throw new Error('Only the F1 LIVE feed is supported');\n    let f1tvUrl;\n    log.debug";
 const hashes = JSON.parse(
   fs.readFileSync(
     new URL("./download-policy-hashes.json", import.meta.url),
@@ -21,8 +24,8 @@ const oldAudio =
 const changes = {
   index: [
     [
-      "    let f1tvUrl;\n    log.debug",
-      "    if (channel !== 'F1 LIVE') throw new Error('Only the F1 LIVE feed is supported');\n    let f1tvUrl;\n    log.debug",
+      originalGuard,
+      "    if (channel === 'ORIGINAL') {\n        const season = Number(content.metadata.season);\n        if (!Number.isInteger(season) || season < 1950 || season >= 2022) throw new Error('Original broadcast is only supported for pre-2022 archive races');\n        return getContentStreamUrl(content.id);\n    }\n    if (channel !== 'F1 LIVE') throw new Error('Only F1 LIVE or a pre-2022 original broadcast is supported');\n    let f1tvUrl;\n    log.debug",
     ],
     [
       "        f1tvUrl = await getContentStreamUrl(content.id);",
@@ -74,6 +77,8 @@ export function patchDownloadSource(source, kind) {
     original = shebang + source.slice(prefix.length);
     for (const [before, after] of [...edits].reverse())
       original = original.split(after).join(before);
+    if (kind === "index" && digest(source) === legacyIndexHash)
+      original = original.replace(legacyGuard, originalGuard);
   }
   if (digest(original) !== hashes[kind])
     throw new Error(
@@ -88,7 +93,7 @@ export function patchDownloadSource(source, kind) {
     patched = patched.split(before).join(after);
   }
   patched = prefix + patched.slice(shebang.length);
-  if (source.startsWith(prefix) && source !== patched)
+  if (source.startsWith(prefix) && source !== patched && digest(source) !== legacyIndexHash)
     throw new Error("Cannot patch f1tv-dl: download policy was altered");
   return patched;
 }

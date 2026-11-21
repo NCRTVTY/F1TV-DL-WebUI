@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MediaStorage } from "../src/server/storage";
 import { loadConfig } from "../src/server/config";
 const roots: string[] = [];
@@ -13,10 +13,21 @@ function root() {
   return r;
 }
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const r of roots.splice(0))
     fs.rmSync(r, { recursive: true, force: true });
 });
 describe("storage readiness", () => {
+  it("allows local production storage while preserving explicit home NFS enforcement", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("REQUIRE_NFS", "false");
+    const dir = root();
+    const config = loadConfig({ downloadDir: dir, storageLabel: "Archive disk" });
+    expect(config.requireNfs).toBe(false);
+    expect(await new MediaStorage(config).check()).toMatchObject({ ready: true, location: "Archive disk" });
+    vi.stubEnv("REQUIRE_NFS", "true");
+    expect(await new MediaStorage(loadConfig({ downloadDir: dir })).check()).toMatchObject({ ready: false });
+  });
   it("never creates a local fallback when the NFS path is absent", async () => {
     const dir = path.join(root(), "missing");
     const s = new MediaStorage(

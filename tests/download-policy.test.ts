@@ -83,6 +83,18 @@ describe("pinned native download policy", () => {
     ).resolves.toBe("selected stream");
     expect(getContentStreamUrl).toHaveBeenCalledWith(1, 7);
   });
+  it("selects the original main stream for archive races and independently rejects modern content", async () => {
+    const source = patchDownloadSource(fixture("index"), "index");
+    const section = source.slice(source.indexOf("const getTokenizedUrl ="), source.indexOf("\n(async () =>"));
+    const getContentStreamUrl = vi.fn(async () => "archive stream");
+    const select = vm.runInNewContext(section + "\ngetTokenizedUrl", { getContentStreamUrl });
+    await expect(select("", { id: 100, metadata: { season: 2012 } }, "ORIGINAL")).resolves.toBe("archive stream");
+    expect(getContentStreamUrl).toHaveBeenCalledWith(100);
+    getContentStreamUrl.mockClear();
+    for (const season of [undefined, 0, 1949, 2022, 2026])
+      await expect(select("", { id: 100, metadata: { season } }, "ORIGINAL")).rejects.toThrow("pre-2022 archive");
+    expect(getContentStreamUrl).not.toHaveBeenCalled();
+  });
   it("selects the exact English DASH representation and rejects absent 720p", async () => {
     const source = patchDownloadSource(fixture("api"), "api");
     const section = source.slice(

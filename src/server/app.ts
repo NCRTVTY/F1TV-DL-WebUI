@@ -9,7 +9,7 @@ import {
   type CalendarFetch,
   type CatalogFetch,
 } from "./catalog";
-import { CredentialVault } from "./crypto";
+import { CredentialVault, resolveEncryptionKey } from "./crypto";
 import { AppDatabase, downloadPolicy, type Job } from "./database";
 import { credentialsSettingKey, DownloadWorker } from "./downloader";
 import { MediaStorage } from "./storage";
@@ -51,7 +51,19 @@ export async function buildApp({
     bodyLimit: 32 * 1024,
   });
   const db = new AppDatabase(path.join(config.dataDir, "f1tv-dl-webui.sqlite"));
-  const vault = new CredentialVault(config.encryptionKey);
+  const savedAccount = db.getSetting(credentialsSettingKey);
+  let vault: CredentialVault;
+  try {
+    vault = new CredentialVault(resolveEncryptionKey(config.dataDir, config.encryptionKey, Boolean(savedAccount)));
+    if (savedAccount) {
+      const credentials = vault.decrypt(savedAccount);
+      credentials.username = "";
+      credentials.password = "";
+    }
+  } catch {
+    db.close();
+    throw new Error("Cannot unlock the saved account; restore the original encryption key and persistent data");
+  }
   const worker = new DownloadWorker(db, vault, config, storage);
   const removalCoordinator = new JobRemovalCoordinator(
     db,

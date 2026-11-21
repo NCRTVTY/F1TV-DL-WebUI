@@ -32,6 +32,7 @@ import type {
   Settings,
 } from "./types";
 import racePhoto from "./assets/race.jpg";
+import { downloadFeedLabel } from "../shared/download-policy";
 
 const navItems = [
   { id: "browse", label: "Browse", Icon: Compass },
@@ -242,7 +243,7 @@ const initialSettings: Settings = {
     totalBytes: 0,
     enoughSpace: false,
     message: "Checking media storage",
-    location: "Synology / Homelab-workspace / f1tv-dl",
+    location: "Media storage",
   },
 };
 export function App() {
@@ -594,7 +595,7 @@ export function App() {
             </Button>
           ) : (
             <div className="fd-policy" style={{ color: "#fff" }}>
-              720p · English · F1 LIVE
+              720p · English · {downloadFeedLabel(event.season)}
             </div>
           )}
         </div>
@@ -922,7 +923,7 @@ export function App() {
                       sessions.length ? "Show all sessions" : "Check again"
                     }
                   >
-                    Only F1 LIVE replays with English audio can be downloaded.
+                    Replays require native 720p and English audio. Pre-2022 races use the original broadcast.
                   </Empty>
                 )}
               </>
@@ -988,7 +989,7 @@ export function App() {
                       : "Downloading"}
                 </span>
                 <h3>{running.title}</h3>
-                <p className="fd-small fd-muted">720p · English · F1 LIVE</p>
+                <p className="fd-small fd-muted">720p · English · {downloadFeedLabel(running.season)}</p>
               </div>
             </div>
             <div
@@ -1262,14 +1263,14 @@ export function App() {
               >
                 {storageReady
                   ? "The downloaded file is missing."
-                  : "Waiting for Synology media storage."}
+                  : "Waiting for media storage."}
               </Empty>
             )}
             <div className="fd-watch-info">
               <div>
                 <h1>{watched.title}</h1>
                 <p className="fd-small fd-muted" style={{ marginTop: 7 }}>
-                  {watched.season} · F1 LIVE · English ·{" "}
+                  {watched.season} · {downloadFeedLabel(watched.season)} · English ·{" "}
                   {fileSize(watched.file?.size)}
                 </p>
               </div>
@@ -1422,7 +1423,7 @@ export function App() {
             </div>
             {[
               ["Resolution", "720p"],
-              ["Feed", "F1 LIVE"],
+              ["Feed", "F1 LIVE; original broadcast before 2022"],
               ["Audio", "English only"],
               ["File", "MP4"],
             ].map(([k, v]) => (
@@ -1449,11 +1450,11 @@ export function App() {
                 {!settingsLoaded
                   ? "Status pending"
                   : storageReady
-                    ? "Synology connected"
-                    : "Waiting for Synology"}
+                    ? "Storage connected"
+                    : "Waiting for media storage"}
               </strong>
             </div>
-            <p className="fd-storage-name">Homelab-workspace / f1tv-dl</p>
+            <p className="fd-storage-name">{settings.storage.location}</p>
             {storageReady ? (
               <>
                 <div className="fd-setting-line">
@@ -1469,7 +1470,7 @@ export function App() {
               <div className="fd-notice">{settings.storage.message}</div>
             ) : null}
             <p className="fd-small fd-muted" style={{ marginTop: 16 }}>
-              Media is saved to Synology. Your account and queue stay on the
+              Media is saved to your configured storage. Your account and queue stay on the
               server.
             </p>
             <Button
@@ -1604,13 +1605,13 @@ export function App() {
             </div>
           )}
           <footer className="fd-app-footer">
-            <span>720p · English · F1 LIVE</span>
+            <span>720p · English · F1 LIVE / Archive</span>
             <span>
               {!settingsLoaded
-                ? "Media on Synology"
+                ? "Media storage"
                 : storageOffline
                   ? "Waiting for media storage"
-                  : "Saved to Synology"}
+                  : "Saved to media storage"}
             </span>
           </footer>
           <nav className="fd-mobile-nav" aria-label="Mobile app navigation">
@@ -1649,7 +1650,7 @@ export function App() {
             {dialog.kind === "account"
               ? "You can continue browsing. New downloads will need your F1TV account again."
               : dialog.kind === "remove"
-                ? "The MP4 will be deleted from Synology and removed from Downloads."
+                ? "The MP4 will be deleted from media storage and removed from Downloads."
                 : "The download will stop and its unfinished file will be removed."}
           </p>
         </Modal>

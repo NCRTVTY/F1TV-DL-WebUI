@@ -15,6 +15,7 @@ export interface AppConfig {
   downloadInactivityTimeoutMs: number;
   requireNfs: boolean;
   storageId: string;
+  storageLabel: string;
   storageMinFreeBytes: number;
   storageTimeoutMs: number;
 }
@@ -47,10 +48,9 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       process.env.DOWNLOAD_INACTIVITY_TIMEOUT_MS,
       300000,
     ),
-    requireNfs:
-      process.env.REQUIRE_NFS === "true" ||
-      process.env.NODE_ENV === "production",
+    requireNfs: process.env.REQUIRE_NFS === "true",
     storageId: process.env.STORAGE_ID || "f1tv-dl-media-v1",
+    storageLabel: process.env.STORAGE_LABEL || "Media storage",
     storageMinFreeBytes: positiveInteger(
       process.env.STORAGE_MIN_FREE_BYTES,
       2_000_000_000,

@@ -2,27 +2,34 @@ name: f1tv-dl-webui
 
 services:
   app:
-    image: ${REGISTRY:-docker-registry.nc:17788}/f1tv-dl-webui:${TAG:-latest}
-    container_name: f1tv-dl-webui
+    image: ${APP_IMAGE:-f1tv-dl-webui:local}
+    build:
+      context: .
+      args:
+        DRONE_COMMIT: ${TAG:-development}
+    container_name: ${APP_CONTAINER_NAME:-f1tv-dl-webui}
     ports:
-      - "43729:43729"
+      - "${BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-43729}:43729"
     environment:
-      TZ: Europe/Brussels
+      TZ: ${TZ:-UTC}
       HOST: 0.0.0.0
       PORT: "43729"
       DATA_DIR: /app/data
       DOWNLOAD_DIR: /app/downloads
-      REQUIRE_NFS: "true"
-      STORAGE_ID: f1tv-dl-media-v1
+      REQUIRE_NFS: ${REQUIRE_NFS:-false}
+      STORAGE_ID: ${STORAGE_ID:-f1tv-dl-media-v1}
+      STORAGE_LABEL: ${STORAGE_LABEL:-Media storage}
+      STORAGE_MIN_FREE_BYTES: ${STORAGE_MIN_FREE_BYTES:-2000000000}
+      DOWNLOAD_INACTIVITY_TIMEOUT_MS: ${DOWNLOAD_INACTIVITY_TIMEOUT_MS:-300000}
       DRONE_COMMIT: ${TAG:-development}
-      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY is required}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
     volumes:
-      - /home/ronny/docker/f1tv-dl-webui/data:/app/data
+      - ${DATA_PATH:-data}:/app/data
       - type: volume
         source: media
         target: /app/downloads
         volume:
-          nocopy: true
+          nocopy: ${MEDIA_NOCOPY:-false}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
@@ -45,10 +52,11 @@ services:
       start_period: 20s
 
 volumes:
+  data:
   media:
-    name: f1tv-dl-media
+    name: ${MEDIA_VOLUME_NAME:-f1tv-dl-media}
     driver: local
     driver_opts:
-      type: nfs
-      o: addr=192.168.0.15,nfsvers=4.1,rw,hard,timeo=50,retrans=2,rsize=1048576,wsize=1048576
-      device: :/volume2/Homelab-workspace/f1tv-dl
+      type: ${MEDIA_TYPE:-}
+      o: ${MEDIA_OPTIONS:-}
+      device: ${MEDIA_DEVICE:-}

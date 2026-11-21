@@ -9,6 +9,7 @@ import { resolveStoredFile } from "./files";
 import { redact } from "./redaction";
 import { MediaStorage } from "./storage";
 import { inspectDownload } from "./media";
+import { downloadChannel } from "../shared/download-policy";
 
 const CREDENTIALS_KEY = "f1tv_credentials";
 
@@ -26,7 +27,7 @@ export function buildArguments(job: Job, outputDirectory: string): string[] {
     "--log-level",
     "info",
   ];
-  args.push("--channel", "F1 LIVE");
+  args.push("--channel", downloadChannel(job.season));
   return args;
 }
 

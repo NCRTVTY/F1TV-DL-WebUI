@@ -53,14 +53,34 @@ steps:
     environment:
       REGISTRY: docker-registry.nc:17788
       TAG: ${DRONE_COMMIT}
+      APP_IMAGE: docker-registry.nc:17788/f1tv-dl-webui:${DRONE_COMMIT}
       COMPOSE_PROJECT_NAME: f1tv-dl-webui
+      DATA_PATH: /home/ronny/docker/f1tv-dl-webui/data
+      APP_PORT: "43729"
+      TZ: Europe/Brussels
+      REQUIRE_NFS: "true"
+      STORAGE_LABEL: Synology / Homelab-workspace / f1tv-dl
+      STORAGE_ID: f1tv-dl-media-v1
+      MEDIA_VOLUME_NAME: f1tv-dl-media
+      MEDIA_TYPE: nfs
+      MEDIA_DEVICE: ":/volume2/Homelab-workspace/f1tv-dl"
+      MEDIA_OPTIONS: addr=192.168.0.15,nfsvers=4.1,rw,hard,timeo=50,retrans=2,rsize=1048576,wsize=1048576
+      MEDIA_NOCOPY: "true"
       APP_ENCRYPTION_KEY:
         from_secret: F1TV_DL_WEBUI_ENCRYPTION_KEY
     commands:
       - docker compose -f ./docker-compose.yml config -q
+      - |
+        if docker inspect f1tv-dl-webui >/dev/null 2>&1; then
+          current_data=$(docker inspect f1tv-dl-webui --format '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Source}}{{end}}{{end}}')
+          current_media=$(docker inspect f1tv-dl-webui --format '{{range .Mounts}}{{if eq .Destination "/app/downloads"}}{{.Name}}{{end}}{{end}}')
+          test "$current_data" = "$DATA_PATH" || { echo "Refusing to change the existing data location"; exit 1; }
+          test "$current_media" = "$MEDIA_VOLUME_NAME" || { echo "Refusing to change the existing media volume"; exit 1; }
+          docker exec f1tv-dl-webui node -e 'const fs=require("node:fs"),path=require("node:path"),Database=require("better-sqlite3");const db=new Database("/app/data/f1tv-dl-webui.sqlite");if(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status IN (?,?)").get("queued","running").n)throw new Error("Wait for pending downloads before deploying");const dir="/app/data/backups";fs.mkdirSync(dir,{recursive:true,mode:448});const target=path.join(dir,"before-deploy-"+Date.now()+".sqlite");db.backup(target).then(()=>{fs.chmodSync(target,384);db.close();console.log("Private database backup created; existing downloads preserved")}).catch(()=>{db.close();process.exitCode=1})'
+        fi
       - docker run --rm -v /home/ronny/docker/f1tv-dl-webui:/state alpine:3.21 sh -eu -c "mkdir -p /state/data/f1tv-home && chown -R 1000:1000 /state/data && chmod 700 /state/data /state/data/f1tv-home"
       - docker compose -f ./docker-compose.yml pull
-      - docker compose -f ./docker-compose.yml up -d --remove-orphans
+      - docker compose -f ./docker-compose.yml up -d --no-build --remove-orphans
       - |
         attempts=0
         until docker exec f1tv-dl-webui node -e "fetch('http://127.0.0.1:43729/api/health').then(async response=>{const body=await response.json();if(!response.ok||!body.ok||body.commit!=='$DRONE_COMMIT'||!body.storage.writable)process.exit(1)}).catch(()=>process.exit(1))"; do

@@ -2,12 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
+import { downloadPolicy, downloadChannel } from "../shared/download-policy";
+export { downloadPolicy } from "../shared/download-policy";
 
-export const downloadPolicy = {
-  quality: "1280x720",
-  audio: "eng",
-  channel: "F1 LIVE",
-} as const;
 export type JobStatus =
   | "queued"
   | "running"
@@ -114,7 +111,7 @@ export class AppDatabase {
       .run("default_download_feed");
     this.db
       .prepare(
-        "UPDATE jobs SET quality=?,audio=?,channel=? WHERE status='queued'",
+        "UPDATE jobs SET quality=?,audio=?,channel=CASE WHEN season >= 1950 AND season < 2022 THEN 'ORIGINAL' ELSE ? END WHERE status='queued'",
       )
       .run(
         downloadPolicy.quality,
@@ -175,7 +172,7 @@ export class AppDatabase {
         input.url,
         downloadPolicy.quality,
         downloadPolicy.audio,
-        downloadPolicy.channel,
+        downloadChannel(input.season),
         input.contentId ?? null,
         input.title?.slice(0, 240) ?? null,
         input.thumbnailUrl ?? null,

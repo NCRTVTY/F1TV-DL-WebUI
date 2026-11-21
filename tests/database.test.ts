@@ -18,6 +18,16 @@ afterEach(() => {
     fs.rmSync(r, { recursive: true, force: true });
 });
 describe("durable download queue", () => {
+  it("retains the archive feed choice across a database restart without changing modern jobs", () => {
+    let { file, db } = fixture();
+    const archive = db.createJob({ ...input, season: 2012 });
+    const modern = db.createJob({ ...input, season: 2022 });
+    db.close();
+    db = new AppDatabase(file);
+    expect(db.getJob(archive.id)).toMatchObject({ channel: "ORIGINAL", season: 2012, status: "queued" });
+    expect(db.getJob(modern.id)).toMatchObject({ channel: "F1 LIVE", season: 2022, status: "queued" });
+    db.close();
+  });
   it("enforces the fixed policy even when callers supply conflicting preferences", () => {
     const { db } = fixture();
     expect(

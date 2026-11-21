@@ -73,6 +73,21 @@ afterEach(() => {
 });
 
 describe("HTTP API", () => {
+  it("keeps a fresh installation's saved account usable across restarts and rejects a changed key", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "f1tv-app-key-")));
+    directories.push(root);
+    const config = loadConfig({ dataDir: path.join(root, "data"), downloadDir: path.join(root, "downloads"), clientDir: path.join(root, "no-client"), requireNfs: false, encryptionKey: undefined });
+    let app = await buildApp({ config, startWorker: false });
+    expect((await app.inject({ method: "PUT", url: "/api/settings/credentials", payload: { username: "fixture-user", password: "fixture-value" } })).statusCode).toBe(200);
+    await app.close();
+    app = await buildApp({ config, startWorker: false });
+    const settings = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(settings.json()).toMatchObject({ credentialsConfigured: true, encryptionReady: true });
+    expect(settings.body).not.toContain("fixture-user");
+    expect(settings.body).not.toContain("fixture-value");
+    await app.close();
+    await expect(buildApp({ config: { ...config, encryptionKey: "different-fixture-key".repeat(2) }, startWorker: false })).rejects.toThrow("restore the original encryption key");
+  });
   it("reports health without exposing configuration values", async () => {
     const app = await application();
     const response = await app.inject({ method: "GET", url: "/api/health" });

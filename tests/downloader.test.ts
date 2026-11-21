@@ -26,6 +26,12 @@ const job: Job = {
 };
 
 describe("f1tv-dl command construction", () => {
+  it("uses the original broadcast only for known pre-2022 archive seasons", () => {
+    for (const season of [1950, 2012, 2021])
+      expect(buildArguments({ ...job, season }, "/downloads/job").slice(-2)).toEqual(["--channel", "ORIGINAL"]);
+    for (const season of [null, 0, 1949, 2022, 2026])
+      expect(buildArguments({ ...job, season }, "/downloads/job").slice(-2)).toEqual(["--channel", "F1 LIVE"]);
+  });
   it("passes fixed arguments without credentials", () => {
     const args = buildArguments(job, "/downloads/fixture-job");
     expect(args).toEqual([
