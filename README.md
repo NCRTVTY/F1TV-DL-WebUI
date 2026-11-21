@@ -1,19 +1,55 @@
 # F1TV-DL-WebUI
 
-A self-hosted replay library for desktop, phone and tablet. Browse Formula 1 weekends, queue replays and watch or save a single native 720p MP4.
+**Download at home. Watch on the plane, on the train, or wherever the connection
+is too slow for streaming.**
+
+F1TV-DL-WebUI is a self-hosted tool for saving supported F1 TV replays before you
+travel. Browse a season, queue a race, and save the finished MP4 to your phone,
+tablet or laptop. Think of the familiar Netflix-style “save now, watch later”
+workflow, with storage you manage yourself. This is an independent tool, not an
+official F1 TV offline feature or an affiliation with either service.
+
+You need your own F1 TV account with access to the replay. Subscription access,
+regional availability and permission to save content are separate matters; the
+software does not bypass unsupported DRM or geographic restrictions.
+
+## Before starting
+
+Install Docker Engine with Compose v2, or Docker Desktop. Host Node.js, npm,
+Chromium and FFmpeg are not needed for the Docker installation.
+
+Choose persistent storage and check its actual free space. The default Compose
+file already uses persistent Docker volumes for both account data and media;
+an external drive or NAS is optional, not required for persistence. As practical
+starting recommendations, budget **10 GB free on Docker's build/image disk**
+and **20 GB free on the media disk**. These are planning allowances, not measured
+hardware minima or a guarantee that a queue fits. See [storage planning](DOCS/storage.md).
+If images, data and media share Docker's disk/VM, add the allowances rather than
+counting the same free bytes twice.
+
+The repository is currently private, so cloning requires repository access. MIT
+licensing does not change its visibility. AI assistants should start with
+[llms.txt](llms.txt) and the repository's [AGENTS.md](AGENTS.md).
 
 ## Docker Compose quick start
 
-Install Docker Engine with Compose v2 (or Docker Desktop), then:
+Use the persistent defaults below, or configure [your chosen disk or NAS](#storage-configuration)
+before running `up`. Install Docker Engine with Compose v2 (or Docker Desktop), then:
 
 ```sh
 git clone https://github.com/NCRTVTY/F1TV-DL-WebUI.git
 cd F1TV-DL-WebUI
+docker compose config --quiet
 docker compose up -d --build
+docker compose ps
 ```
 
 Open [the application](http://localhost:43729) and enter your own F1 TV account in
-Settings. The first build installs all runtime dependencies inside the image.
+Settings. On a separate server, replace `localhost` with that server's address.
+The first build installs all runtime dependencies inside the image and can take
+several minutes. New default installations generate their own persistent
+encryption key; you do not need to invent or paste one.
+If you changed `APP_PORT`, open that port instead of 43729.
 The default installation uses persistent Docker volumes for account settings,
 queue, provider session, encryption key and downloads. Drone is not required.
 Use `docker compose down` to stop it; **do not use `down -v`** unless you intend
@@ -25,9 +61,31 @@ if exposing it through a reverse proxy, configure authentication and HTTPS there
 The default port is reachable on the host's network interfaces. Set
 `BIND_ADDRESS=127.0.0.1` when only a local reverse proxy should access it.
 
+## Save a replay for offline viewing
+
+1. In **Browse**, select a season, weekend and supported replay, then **Add to queue**.
+2. Wait for it to appear in **Downloads** as complete. Failed or missing files
+   are not ready to take with you.
+3. On the device you will travel with, choose **Save MP4**. Wait for the entire
+   file to finish downloading to that device, not just your home server.
+4. Open the local file in a compatible player, such as VLC. Test playback and
+   seeking with networking off before leaving.
+
+Once the file is on the device, viewing does not need the home server, VPN or a
+fast connection. The web interface itself is not an offline app, and a replay
+stored only on your NAS is not yet an offline copy on your phone.
+
+Check Settings before downloading: storage must be connected, writable and have
+enough free space for the planned files. A healthy container alone does not prove
+that a replay fits. For diagnostics, see [operations](DOCS/operations.md).
+
+## Storage configuration
+
 ### Download to another disk
 
-Copy `.env.example` to `.env`, then uncomment and set this **non-secret** value:
+For a new installation without an existing `.env`, copy `.env.example` to `.env`,
+then uncomment and set this **non-secret** value. Preserve an existing file and
+its settings instead of overwriting it:
 
 ```dotenv
 DOWNLOAD_PATH=/absolute/path/to/downloads
@@ -42,30 +100,19 @@ sharing support. To change an existing installation's disk, stop the app and
 preserve its existing media. The app does not import or migrate existing files
 automatically. Do not delete its old volume as part of changing the path.
 
-### Direct NFS storage
+### Network storage and capacity
 
-Use the same Compose file with these non-secret settings, replacing the example
-server and export for your own network:
+For already-mounted NAS shares and direct Docker NFS volumes, follow
+[storage planning and NFS](DOCS/storage.md). Verify the expected share on the
+actual Docker host before starting; a local folder at a missing mount point is
+not proof of a mounted NAS. Never create a substitute directory to hide a failed
+network mount.
 
-```dotenv
-MEDIA_TYPE=nfs
-MEDIA_DEVICE=:/export/replays
-MEDIA_OPTIONS=addr=nas.example,nfsvers=4.1,rw,hard,timeo=50,retrans=2
-DOWNLOAD_MOUNT_OPTIONS=rw,nocopy
-REQUIRE_NFS=true
-STORAGE_ID=f1tv-dl-media-v1
-STORAGE_LABEL=My NAS / replays
-```
-
-Create `.f1tv-storage-id` containing the configured `STORAGE_ID` on that export,
-and grant UID/GID 1000 access. Direct NFS mounting requires a Linux Docker host
-with NFS support and export authorization. Leave `DOWNLOAD_PATH` unset for this
-named-volume mode. Docker volume options are fixed at creation; changing NFS
-options requires a different `MEDIA_VOLUME_NAME` after preserving existing media.
-`REQUIRE_NFS=true` refuses a local
-filesystem or a missing/mismatched marker, so jobs wait instead of writing to a
-fallback directory. Local disks do not need a marker. All storage modes retain
-write checks, free-space checks and timed probes.
+Named volumes are persistent, but not a backup. Docker Desktop's storage VM can
+be full even when the Mac or Windows host has plenty of free disk. A 200 MB
+media target is unusable: the app's default 2 GB free-space floor already exceeds
+it, and complete replays take several GB. That floor is an admission check, not a
+file-size estimate or reserved space. Do not lower it to bypass a capacity issue.
 
 ### Encryption and backups
 
@@ -82,14 +129,11 @@ a replacement key. Do not put secrets in the tracked example or ordinary `.env`.
 Repository-local secret files, when explicitly required, belong only in ignored
 root `SECRETS/`; production keys can remain in the CI secret store.
 
-### Build and run separately, or use CI
+## Build separately or use Drone
 
-The Dockerfile is the common image recipe. For a separate build, use
-`docker build -t f1tv-dl-webui:local .`, then `docker compose up -d --no-build`.
-CI can build and push a commit-tagged image, set `APP_IMAGE` and `TAG`, then run
-`docker compose pull && docker compose up -d --no-build`. The tracked `.drone.yml`
-is the maintainer's home pipeline; other operators can adapt its host and registry
-settings and supply their own secret store without needing the maintainer's LAN.
+The same Dockerfile builds local and CI images. Drone is optional; see
+[Docker and CI deployment](DOCS/deployment.md) for separate build/run commands,
+registry images and adapting the tracked home pipeline to another server.
 
 ## Download policy
 
@@ -99,7 +143,7 @@ The provider may deliver HEVC or H.264. Native HEVC works in suitable device pla
 
 ## Interface and queue
 
-The approved dark interface has Browse, Weekend sessions, Queue, Downloads, Watch and Settings screens, with desktop top navigation and mobile bottom navigation. Real catalog imagery decorates weekends and sessions. City labels distinguish Miami, Austin and Las Vegas. Upcoming weekends remain browsable without pretending replays are available.
+The interface has Browse, Weekend sessions, Queue, Downloads, Watch and Settings screens, with desktop top navigation and mobile bottom navigation. Real catalog imagery decorates weekends and sessions. City labels distinguish Miami, Austin and Las Vegas. Upcoming weekends remain browsable without pretending replays are available.
 
 The queue runs one download at a time. Pause prevents the next job from starting; a current download continues. Reorder queued jobs, cancel active work, retry failures or remove a replay and its files. SQLite persists queue state and pause across restarts. Interrupted downloads restart from the beginning of their staging directory; segment-level resume is not supported by the upstream engine. A five-minute inactivity watchdog considers both process output and file activity. Explicit deletion requests persist until storage recovers; unrelated directories are never swept.
 
@@ -109,45 +153,42 @@ The browser refreshes its snapshot after reconnect, device wake and periodically
 
 Use Node.js 22 and FFmpeg/FFprobe. Install with `npm ci` and run `npm run dev` plus `npm run dev:client`. Open [the local client](http://localhost:43730); Vite proxies to port 43729. Development uses local `data/` and `downloads/` directories unless configured otherwise.
 
-`npm run verify` runs TypeScript checks, queue/API/storage tests, real FFmpeg media-validation tests, upstream patch checks and production builds. Chromium is included in the runtime for provider authentication. Installation rejects modified upstream source instead of silently losing the policy or authentication patches.
+`npm run verify` runs TypeScript checks, queue/API/storage tests, real FFmpeg media-validation tests, upstream patch checks, notice generation and production builds. `npm run licenses` regenerates the complete lockfile license inventory and client notices; the built app serves them at `/licenses/index.html`. See the [script guide](scripts/README.md). Chromium is included in the runtime for provider authentication. Installation rejects modified upstream source instead of silently losing the policy or authentication patches.
 
 Never commit account details or deployment secrets. Repository-local secret files, only when explicitly requested, belong under the ignored root `SECRETS/` directory.
 
-## Harlem and Synology
+## Existing home deployment and maintenance
 
-The tracked `.drone.yml` explicitly supplies the existing home configuration to the same portable Compose file. Drone is the production deployment path. A push to `main` verifies the repository on Harlem, builds and pushes an immutable commit-tagged image, applies Compose and verifies the exact commit and writable storage at `/api/health`.
+The tracked `.drone.yml` explicitly supplies the maintainer's existing home
+settings to the same portable Compose file. Its registry, runner, paths and NAS
+address are installation-specific; new users do not need that infrastructure.
+See [home deployment](DOCS/home-deployment.md).
 
-- Local SQLite and provider session: `/home/ronny/docker/f1tv-dl-webui/data` → `/app/data`.
-- Media: Synology `192.168.0.15:/volume2/Homelab-workspace/f1tv-dl` → Docker NFS volume `f1tv-dl-media` → `/app/downloads`.
-- Host service port: `43729`.
+Before updating an existing server, preserve its data directory, encryption key,
+media volume/options and project identity. Follow [backups, safe updates and
+troubleshooting](DOCS/operations.md). Drone backs up SQLite and requires an idle
+queue before replacing the container; a busy queue aborts the deployment and
+needs a retry once idle. It does not wait automatically.
 
-Deployment refuses an unexpected existing data path or media volume and requires an idle queue before replacing the container. It creates a private SQLite backup first; it never resets the library.
+The destructive [library reset](DOCS/maintenance.md) is separate maintenance,
+never an installation, ordinary update or default repair step.
 
-The NAS directory is also visible on Harlem at `/mnt/homelab-workspace/f1tv-dl`. It must contain `.f1tv-storage-id` with the non-secret identity `f1tv-dl-media-v1`, and allow UID/GID 1000 to write. Compose mounts that export directly with `volume.nocopy`; it never binds a local downloads directory. Docker waits for the NFS mount before starting the application. The application then requires an NFS filesystem, matching identity, write access and sufficient free space before claiming jobs. Failed readiness keeps the durable queue waiting. Storage probes time out after five seconds and never accumulate duplicate blocked probes. Hard NFS mounts retain their kernel-level retry behavior during outages.
+## Use and licensing
 
-Keep the local database off NFS. Back up the local data directory and the deployment encryption key securely. `APP_ENCRYPTION_KEY` must remain stable; Drone supplies it from `F1TV_DL_WEBUI_ENCRYPTION_KEY`. Changing it makes saved credentials unreadable, and startup now verifies that the saved account can be decrypted before reporting healthy. API responses never return stored account values. The service is designed for the existing trusted LAN/VPN; public hostname and TLS routing are managed outside this repository.
+The original application and original documentation are [MIT licensed](LICENSE).
+Dependencies, adapted upstream source, fonts and imagery retain their own terms;
+read [third-party notices and license scope](THIRD_PARTY_NOTICES.md). MIT does not
+license broadcasts, Formula 1/Netflix marks or photographs.
 
-The legacy local media folder is no longer mounted. Existing content is not migrated or imported.
+This project is intended for a personal offline-viewing workflow, not content
+redistribution or a hosted sharing service. That purpose and a paid subscription
+do not themselves establish permission to save content. The [F1 TV subscription
+terms](https://www.formula1.com/en/information/f1-tv-subscription-terms.384sQqjslhQ2Rhm1LdKgfD)
+restrict copying, downloading and storage except where permitted by law. Check
+the terms and law applicable to your use. Unsupported streams or DRM are not
+bypassed.
 
-## Explicit fresh start
-
-After confirming the queue has no queued or running jobs, the authorized one-time reset is:
-
-```sh
-docker exec f1tv-dl-webui node scripts/reset-library.cjs --confirm-reset-library
-```
-
-It creates a private SQLite backup under local `data/backups/`, clears job history, catalog cache and preferences, and verifies that the saved encrypted account remains identical. It leaves the local encryption key, provider session and all media files untouched. It never runs automatically on deployment or startup. Refresh the browser afterward.
-
-See [the approved scope](DOCS/plans/2026-11-19-720p-nfs-redesign.md) for layout and rollout acceptance criteria. The earlier implementation specification is historical where it differs from this policy.
-
-## Public release status
-
-Portable deployment does not itself change repository visibility or grant a source
-license. The repository is currently marked UNLICENSED. An open-source license,
-third-party notices, image redistribution rights (including embedded design
-photography), and a final history review must be resolved before public release.
-The application is unofficial. F1 TV subscriptions, regional availability and
-[provider terms](https://www.formula1.com/en/information/f1-tv-subscription-terms.384sQqjslhQ2Rhm1LdKgfD)
-remain applicable; supplying an account does not establish permission to archive
-content. Unsupported streams or DRM are not bypassed.
+The repository stays private. Before public release, resolve bundled image
+rights and history review, upstream notice completeness, and the exact source
+and notice obligations of any prebuilt image being distributed. [Historical
+plans](DOCS/README.md) are not setup guides.

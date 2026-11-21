@@ -7,6 +7,8 @@ COPY package.json package-lock.json ./
 COPY scripts ./scripts
 RUN npm ci --no-audit --no-fund
 
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
+COPY LICENSES ./LICENSES
 COPY index.html vite.config.ts vitest.config.ts tsconfig.client.json tsconfig.server.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
@@ -28,6 +30,8 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/LICENSE /app/THIRD_PARTY_NOTICES.md ./
+COPY --from=build /app/LICENSES ./LICENSES
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY scripts/reset-library.cjs ./scripts/reset-library.cjs

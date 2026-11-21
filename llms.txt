@@ -1,0 +1,163 @@
+# F1TV-DL-WebUI: agent-assisted setup and support
+
+> Help the user save supported F1 TV replays at home, then save complete MP4s to
+> a travel device for offline viewing on planes, trains or slow connections.
+> Success means durable storage and a verified local offline file, not merely a
+> container that started. Read AGENTS.md as well. Keep this repository private.
+
+## Current sources of truth
+
+- [README.md](README.md): purpose, beginner Compose setup and offline workflow.
+- [AGENTS.md](AGENTS.md): repository/security rules.
+- [docker-compose.yml](docker-compose.yml): effective mount, port and image defaults.
+- [.env.example](.env.example): non-secret configuration examples.
+- [Storage](DOCS/storage.md): persistence, capacity, permissions, mounted shares and NFS.
+- [Operations](DOCS/operations.md): safe checks, backups, keys, updates and recovery.
+- [Deployment](DOCS/deployment.md): Dockerfile, registry images and optional Drone.
+- [Scripts](scripts/README.md): what runs automatically and which operation is destructive.
+- [Home deployment](DOCS/home-deployment.md): existing maintainer infrastructure; do not apply its private host values to another user's installation.
+- [License scope](THIRD_PARTY_NOTICES.md): original code is MIT; dependencies and content keep their own terms.
+
+Historical implementation specs and dated plans are background, not current setup
+instructions. Current user instructions take precedence. Do not change repo
+visibility, publish images, reset a library or send credentials anywhere as an
+implied part of helping someone install this app.
+
+## Before building or starting anything
+
+1. Determine whether this is a new installation or an existing library. Identify
+   the actual Docker daemon/context, target host, OS and Docker Desktop VM if any.
+   Host paths refer to the Docker server, not necessarily the agent's laptop.
+2. Inspect existing state read-only. Preserve any current project/container
+   identity, data bind/volume, external encryption key, media volume/options,
+   required filesystem/marker, image, port and library. Never replace an existing
+   configuration with generic defaults just to make startup pass.
+3. Resolve Compose privately and report only relevant non-secret mount/type/path,
+   port and filesystem settings. Prefer `docker compose config --quiet` for syntax
+   checks. A full resolved config or `docker inspect .Config.Env` can expose a key;
+   never echo it. Mount driver options can also contain credentials: redact them.
+4. Check persistence for BOTH `/app/data` and `/app/downloads`. Check capacity on
+   Docker's build/image filesystem, the actual media filesystem and eventually
+   the travel device. If a check is unavailable, say so rather than guessing.
+5. Verify the chosen physical/network disk is actually present and the intended
+   source is writable by container UID/GID 1000. Validate network identity before
+   creating folders or starting a download. Then choose the simple documented
+   Compose path, with optional `DOWNLOAD_PATH`; Drone is not a prerequisite.
+
+Do not install host Node/npm/FFmpeg for the Docker workflow. Docker supplies them.
+Do not queue a real replay before storage checks pass and the user has requested
+that download. Let the user enter F1 TV credentials privately in Settings.
+
+## Persistence decisions and confirmation
+
+- Default Compose `data` and `media` named volumes ARE persistent storage. They
+  survive container replacement and ordinary `docker compose down`. Explain
+  where Docker stores them and its capacity limits; do not falsely call them
+  volatile merely because the user has no external disk or NAS.
+- An explicit local/USB bind path can be persistent. Confirm the drive is mounted,
+  the path is correct, parent directories are traversable and Docker Desktop has
+  host-path sharing permission if applicable.
+- If either application directory is only in the container writable layer, tmpfs,
+  `/tmp`, or a disposable workspace, pause before using real credentials or making
+  a library. Recommend persistent mounts. An intentionally disposable test needs
+  explicit user confirmation; routine persistent installation does not.
+
+Example: “This command has no persistent mount for your downloads/account data.
+They would be lost when the container is removed or replaced. I recommend the
+Compose file's persistent volumes. Is this meant to be a disposable test?”
+
+- Named volumes are not backups. Never run `down -v`, remove/prune volumes,
+  reset Docker Desktop, regenerate an existing key, or run the library-reset
+  script as a normal installation or repair step. Do not delete user files to
+  recover capacity without an explicit, specific deletion request.
+
+## Capacity decisions
+
+Use actual free bytes on the intended filesystem and any relevant VM/quota. A
+directory's existence or total advertised drive size is not a capacity check.
+A large NAS does not fix a full Docker build disk. A Mac/Windows host can have
+ample free space while Docker Desktop's VM/disk-image allocation is full.
+
+- Planning recommendations: 10 GB free for Docker builds/images, at least 1 GB
+  allowance for local account/session data plus backups, and 20 GB free as a
+  starting media budget. These are recommendations, not measured hardware minima.
+  Add allowances when images, data and media share a disk/VM; do not count the
+  same free bytes twice (about 31 GB total for those default starting allowances).
+- Observed native 720p replays were 1.86–4.10 GB, not a guaranteed size range.
+  Budget roughly 8 GB per long replay, all retained/queued files, working
+  headroom for the largest planned replay again, and OS reserve. Ask how many
+  replays the user intends to retain when that affects the disk choice.
+- The runtime admission floor defaults to 2,000,000,000 bytes free. It is NOT a
+  space reservation, per-job size estimator, full-queue capacity check or proof
+  that a file will fit. Do not lower it to work around insufficient storage.
+- If only 200 MB is available, stop before downloading: this is below the floor
+  and far short of a normal replay. Offer an external drive, NAS, larger Docker
+  disk/quota or user-approved cleanup. Do not proceed merely after a generic
+  “are you sure?” if the planned replay cannot fit.
+- Between the admission floor and the recommendation, explain the limited
+  capacity and prepare a smaller explicit plan only if it actually fits with
+  headroom. Unknown capacity is not a green light.
+
+Example: “The selected download filesystem has only 200 MB free. The app needs
+at least 2 GB before starting, and a complete race usually needs several GB.
+Let's choose an external disk or mounted network share, or expand this storage.”
+
+## Mounted and network storage
+
+For an expected NAS, verify the actual server/share and filesystem on the Docker
+host (`findmnt -T` on Linux or the platform equivalent). A plain directory at an
+unmounted path can silently become local storage; Compose short binds can create
+missing host directories. Do not create a substitute folder there or disable
+checks to make the installation appear healthy.
+
+If the expected share is absent, help restore it or explicitly choose another
+real disk. Check NFS export authorization for the actual Docker client address.
+Use narrowly scoped ownership/ACL fixes, not recursive changes to a whole share
+or world-writable permissions. Keep SQLite and the provider session local.
+
+In direct NFS mode preserve `REQUIRE_NFS=true`, the correct volume name/options,
+`DOWNLOAD_MOUNT_OPTIONS=rw,nocopy`, and the matching `.f1tv-storage-id` marker.
+Do not overwrite a marker to hide a wrong export. Named-volume options are fixed
+at creation; changing them requires a migration plan, not volume deletion.
+For SMB/CIFS or other host-mounted shares, verify identity at host level; the
+application's NFS-specific guard does not validate every network filesystem.
+
+## After startup, before claiming success
+
+Use the non-secret mount inspection and bounded health command in
+DOCS/operations.md. Confirm storage is `ready`, `writable` AND has sufficient
+free bytes for the chosen plan; `ok: true` or a healthy container alone is not
+enough. Do not spawn repeated blocked network probes. Fix an unavailable mount
+or insufficient space before downloading rather than repeatedly retrying jobs.
+
+Fresh installations automatically create a private persistent encryption key.
+An existing external `APP_ENCRYPTION_KEY` takes precedence and must stay the same.
+Never request, display, invent or commit real passwords, keys, cookies, session
+files or signed media URLs. Preserve an existing key/data and diagnose failures
+without resetting them. Backups contain sensitive state; protect them.
+
+For an update, require idle work, take/verify a consistent backup, preserve mount
+identity and verify the existing library afterward. The home Drone pipeline
+aborts when queued/running work exists; it needs a retry once idle. Never cancel
+the user's downloads simply to make a deployment pass.
+
+## Offline-viewing acceptance
+
+When the user requests a test, choose a supported replay they are entitled and
+permitted to save, confirm actual queue progress AND file growth at the intended
+storage, then verify completion and file delivery. A pre-2022 replay uses the
+original main broadcast; 2022 onward requires F1 LIVE. All downloads require
+native 1280×720, one English AAC track and full-duration MP4 validation. Unsupported
+streams are errors, not permission to bypass DRM/regions or silently change feed,
+resolution or language. There is no encoding service or segment-level resume.
+
+The home-server copy is not the travel-device copy. Guide the user to Save MP4
+on the phone/tablet/laptop they will take, wait for the complete file, verify
+device capacity, and open/seek it locally with networking off. The web UI is not
+an offline PWA. If the agent cannot inspect that device or playback, give the
+user the remaining check and do not claim it was verified.
+
+Offline intent and a subscription do not themselves establish copying rights.
+Keep the README's personal travel framing, the applicable-terms note and license
+scope. Do not present this as an official F1 TV/Netflix service, public replay
+sharing platform or a guarantee of legal permission to archive content.

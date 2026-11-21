@@ -1,4 +1,5 @@
 /SECRETS/
+/public/licenses/
 node_modules/
 dist/
 coverage/

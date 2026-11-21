@@ -3,6 +3,7 @@
 SECRETS
 node_modules
 dist
+public/licenses
 coverage
 data
 downloads

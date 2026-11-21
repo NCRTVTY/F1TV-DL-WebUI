@@ -1,5 +1,9 @@
 # F1TV-DL-WebUI — implementation specification and agent handoff
 
+> Historical handoff, superseded for setup by [README](../README.md),
+> [llms.txt](../llms.txt) and [current operations](operations.md). Do not apply
+> old hosts, frameworks, feed defaults or storage instructions from this document.
+
 ## Status and purpose
 
 Repository: NCRTVTY/F1TV-DL-WebUI (private).

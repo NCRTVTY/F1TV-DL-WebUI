@@ -2,20 +2,21 @@
   "name": "f1tv-dl-webui",
   "version": "0.1.0",
   "private": true,
-  "description": "Self-hosted tablet-friendly web UI for f1tv-dl",
-  "license": "UNLICENSED",
+  "description": "Self-hosted F1 TV replay downloads for offline viewing",
+  "license": "MIT",
   "scripts": {
     "postinstall": "node scripts/patch-f1tv-dl.mjs",
     "dev": "tsx watch src/server/index.ts",
     "dev:client": "vite --host 0.0.0.0 --port 43730",
     "build": "npm run build:client && npm run build:server",
-    "build:client": "vite build",
+    "build:client": "npm run licenses && vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "verify": "npm run typecheck && npm test && npm run build",
-    "start": "node dist/server/index.js"
+    "start": "node dist/server/index.js",
+    "licenses": "node scripts/prepare-notices.mjs"
   },
   "dependencies": {
     "@fastify/static": "10.1.6",
