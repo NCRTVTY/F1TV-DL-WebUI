@@ -4,7 +4,7 @@
 
 Keep one Dockerfile, one configurable Compose file and the tracked Drone pipeline.
 The default deployment builds locally and uses persistent Docker volumes. Operators
-can select another disk with a bind-backed volume or configure NFS. Drone supplies
+can select another disk with a direct bind mount or configure NFS. Drone supplies
 the existing Harlem settings explicitly, including the existing data bind, media
 volume name and NFS options, storage marker, port and encryption-key secret.
 

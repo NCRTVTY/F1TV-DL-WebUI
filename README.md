@@ -27,23 +27,20 @@ The default port is reachable on the host's network interfaces. Set
 
 ### Download to another disk
 
-Copy `.env.example` to `.env`, then uncomment and set these **non-secret** values:
+Copy `.env.example` to `.env`, then uncomment and set this **non-secret** value:
 
 ```dotenv
-MEDIA_TYPE=none
-MEDIA_OPTIONS=bind
-MEDIA_DEVICE=/absolute/path/to/downloads
+DOWNLOAD_PATH=/absolute/path/to/downloads
 ```
 
 Create that directory and grant container UID/GID 1000 read/write/traverse access
 before starting. The directory may be on an internal disk, USB disk or an already
 mounted network share. Keep the database and provider session on local storage.
 
-Docker volume mount options are fixed when the named volume is created. Choose
-them before first launch. To change an existing installation's disk, stop the
-app, preserve its existing media, and use a different `MEDIA_VOLUME_NAME`; the app
-does not import or migrate existing files automatically. Never delete an existing
-volume to change its options without first backing up and understanding its data.
+This uses a regular Docker bind mount, including Docker Desktop's host-path
+sharing support. To change an existing installation's disk, stop the app and
+preserve its existing media. The app does not import or migrate existing files
+automatically. Do not delete its old volume as part of changing the path.
 
 ### Direct NFS storage
 
@@ -54,7 +51,7 @@ server and export for your own network:
 MEDIA_TYPE=nfs
 MEDIA_DEVICE=:/export/replays
 MEDIA_OPTIONS=addr=nas.example,nfsvers=4.1,rw,hard,timeo=50,retrans=2
-MEDIA_NOCOPY=true
+DOWNLOAD_MOUNT_OPTIONS=rw,nocopy
 REQUIRE_NFS=true
 STORAGE_ID=f1tv-dl-media-v1
 STORAGE_LABEL=My NAS / replays
@@ -62,7 +59,10 @@ STORAGE_LABEL=My NAS / replays
 
 Create `.f1tv-storage-id` containing the configured `STORAGE_ID` on that export,
 and grant UID/GID 1000 access. Direct NFS mounting requires a Linux Docker host
-with NFS support and export authorization. `REQUIRE_NFS=true` refuses a local
+with NFS support and export authorization. Leave `DOWNLOAD_PATH` unset for this
+named-volume mode. Docker volume options are fixed at creation; changing NFS
+options requires a different `MEDIA_VOLUME_NAME` after preserving existing media.
+`REQUIRE_NFS=true` refuses a local
 filesystem or a missing/mismatched marker, so jobs wait instead of writing to a
 fallback directory. Local disks do not need a marker. All storage modes retain
 write checks, free-space checks and timed probes.
@@ -121,7 +121,7 @@ The tracked `.drone.yml` explicitly supplies the existing home configuration to 
 - Media: Synology `192.168.0.15:/volume2/Homelab-workspace/f1tv-dl` → Docker NFS volume `f1tv-dl-media` → `/app/downloads`.
 - Host service port: `43729`.
 
-Deployment refuses an unexpected existing data path or media volume and waits for queued/running work to finish before replacing the container. It creates a private SQLite backup first; it never resets the library.
+Deployment refuses an unexpected existing data path or media volume and requires an idle queue before replacing the container. It creates a private SQLite backup first; it never resets the library.
 
 The NAS directory is also visible on Harlem at `/mnt/homelab-workspace/f1tv-dl`. It must contain `.f1tv-storage-id` with the non-secret identity `f1tv-dl-media-v1`, and allow UID/GID 1000 to write. Compose mounts that export directly with `volume.nocopy`; it never binds a local downloads directory. Docker waits for the NFS mount before starting the application. The application then requires an NFS filesystem, matching identity, write access and sufficient free space before claiming jobs. Failed readiness keeps the durable queue waiting. Storage probes time out after five seconds and never accumulate duplicate blocked probes. Hard NFS mounts retain their kernel-level retry behavior during outages.
 

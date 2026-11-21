@@ -25,11 +25,7 @@ services:
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
     volumes:
       - ${DATA_PATH:-data}:/app/data
-      - type: volume
-        source: media
-        target: /app/downloads
-        volume:
-          nocopy: ${MEDIA_NOCOPY:-false}
+      - ${DOWNLOAD_PATH:-media}:/app/downloads:${DOWNLOAD_MOUNT_OPTIONS:-rw}
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m

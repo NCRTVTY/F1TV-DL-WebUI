@@ -65,7 +65,7 @@ steps:
       MEDIA_TYPE: nfs
       MEDIA_DEVICE: ":/volume2/Homelab-workspace/f1tv-dl"
       MEDIA_OPTIONS: addr=192.168.0.15,nfsvers=4.1,rw,hard,timeo=50,retrans=2,rsize=1048576,wsize=1048576
-      MEDIA_NOCOPY: "true"
+      DOWNLOAD_MOUNT_OPTIONS: rw,nocopy
       APP_ENCRYPTION_KEY:
         from_secret: F1TV_DL_WEBUI_ENCRYPTION_KEY
     commands:
