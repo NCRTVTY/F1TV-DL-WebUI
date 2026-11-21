@@ -279,11 +279,11 @@ export function App() {
     [username, setUsername] = useState(""),
     [password, setPassword] = useState("");
   const versions = useRef(new Map<string, number>());
-  const settingsLoaded = useRef(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const syncSettings = useCallback(async () => {
     const v = await api<Settings>("/api/settings");
     setSettings(v);
-    settingsLoaded.current = true;
+    setSettingsLoaded(true);
   }, []);
   const syncJobs = useCallback(async () => {
     const v = await api<{ jobs: Job[] }>("/api/jobs");
@@ -535,7 +535,9 @@ export function App() {
     );
   const failed = jobs.filter((j) => j.status === "failed");
   const watched = completed.find((j) => j.id === watchId) ?? completed[0];
-  const storageReady = settings.storage.ready;
+  const storageReady = settingsLoaded && settings.storage.ready === true;
+  const storageOffline = settingsLoaded && settings.storage.ready === false;
+  const storageLowSpace = storageReady && settings.storage.enoughSpace === false;
   const refreshButton = (
     <Button
       disabled={loading || sessionLoading}
@@ -976,12 +978,12 @@ export function App() {
               <div className="fd-job-copy">
                 <span
                   className={
-                    "fd-eyebrow " + (storageReady ? "fd-good" : "fd-warn")
+                    "fd-eyebrow " + (storageOffline ? "fd-warn" : "fd-good")
                   }
                 >
                   {!online
                     ? "Reconnecting"
-                    : !storageReady
+                    : storageOffline
                       ? "Waiting for storage"
                       : "Downloading"}
                 </span>
@@ -1018,9 +1020,9 @@ export function App() {
           <span className="fd-small fd-muted">
             {settings.paused
               ? "Queue paused"
-              : !storageReady
+              : storageOffline
                 ? "Waiting for storage"
-                : !settings.storage.enoughSpace
+                : storageLowSpace
                   ? "Waiting for free space"
                   : "In download order"}
           </span>
@@ -1158,7 +1160,7 @@ export function App() {
                     <p className="fd-small fd-muted">
                       720p · English · {fileSize(j.file?.size)}
                     </p>
-                    {!j.file?.available && (
+                    {settingsLoaded && !j.file?.available && (
                       <p className="fd-small fd-warn">
                         {storageReady
                           ? "File is missing"
@@ -1238,7 +1240,11 @@ export function App() {
         </div>
         <div className="fd-player-layout">
           <section>
-            {storageReady && watched.file?.available ? (
+            {!settingsLoaded ? (
+              <p className="fd-muted" role="status">
+                Loading replay…
+              </p>
+            ) : storageReady && watched.file?.available ? (
               <video
                 className="fd-player"
                 key={watched.id}
@@ -1340,7 +1346,7 @@ export function App() {
               <strong>
                 {settings.credentialsConfigured
                   ? "Credentials saved"
-                  : settingsLoaded.current
+                  : settingsLoaded
                     ? "Account not connected"
                     : "Checking account"}
               </strong>
@@ -1432,11 +1438,19 @@ export function App() {
               <span
                 className="fd-dot"
                 style={
-                  !storageReady ? { background: "var(--fd-amber)" } : undefined
+                  !settingsLoaded
+                    ? { background: "var(--fd-muted)" }
+                    : storageOffline
+                      ? { background: "var(--fd-amber)" }
+                      : undefined
                 }
               />
               <strong>
-                {storageReady ? "Synology connected" : "Waiting for Synology"}
+                {!settingsLoaded
+                  ? "Status pending"
+                  : storageReady
+                    ? "Synology connected"
+                    : "Waiting for Synology"}
               </strong>
             </div>
             <p className="fd-storage-name">Homelab-workspace / f1tv-dl</p>
@@ -1451,9 +1465,9 @@ export function App() {
                   <strong>{completed.length} files</strong>
                 </div>
               </>
-            ) : (
+            ) : storageOffline ? (
               <div className="fd-notice">{settings.storage.message}</div>
-            )}
+            ) : null}
             <p className="fd-small fd-muted" style={{ marginTop: 16 }}>
               Media is saved to Synology. Your account and queue stay on the
               server.
@@ -1521,34 +1535,38 @@ export function App() {
               <span
                 className="fd-dot"
                 style={
-                  !online || !storageReady
+                  !online || storageOffline
                     ? { background: "var(--fd-amber)" }
-                    : undefined
+                    : !settingsLoaded
+                      ? { background: "var(--fd-muted)" }
+                      : undefined
                 }
               />
               {!online
                 ? "Reconnecting"
-                : !storageReady
+                : storageOffline
                   ? "Storage offline"
-                  : "Connected"}
+                  : settingsLoaded
+                    ? "Connected"
+                    : "Connecting"}
             </span>
           </header>
           {!online ? (
             <div className="fd-notice fd-app-notice" role="status">
               Connection lost. Reconnecting… Your queue is saved.
             </div>
-          ) : !storageReady ? (
+          ) : storageOffline ? (
             <div className="fd-notice fd-app-notice" role="status">
               <span>Media storage is unavailable. Downloads are waiting.</span>
               <Button onClick={() => navigate("settings")}>View storage</Button>
             </div>
-          ) : !settings.storage.enoughSpace ? (
+          ) : storageLowSpace ? (
             <div className="fd-notice fd-app-notice">
               Media storage is low on free space. New downloads are waiting.
             </div>
           ) : null}
           {!settings.credentialsConfigured &&
-            settingsLoaded.current &&
+            settingsLoaded &&
             screen !== "settings" && (
               <div className="fd-notice fd-app-notice">
                 <span>Connect your F1TV account to download replays.</span>
@@ -1588,7 +1606,11 @@ export function App() {
           <footer className="fd-app-footer">
             <span>720p · English · F1 LIVE</span>
             <span>
-              {storageReady ? "Saved to Synology" : "Waiting for media storage"}
+              {!settingsLoaded
+                ? "Media on Synology"
+                : storageOffline
+                  ? "Waiting for media storage"
+                  : "Saved to Synology"}
             </span>
           </footer>
           <nav className="fd-mobile-nav" aria-label="Mobile app navigation">
