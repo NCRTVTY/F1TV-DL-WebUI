@@ -77,6 +77,14 @@ Check export/share authorization for the actual Docker host and UID/GID access.
 SMB/CIFS needs host-level identity/availability checks; the application's NFS
 guard does not validate arbitrary network filesystem types.
 
+Before using a host-mounted share with Docker's automatic restart policy, install
+a host startup gate that verifies the expected export **before dockerd starts**.
+An entrypoint wait or checking a directory after Docker has bound it is too late:
+mounting NFS later does not repair a container's existing private bind. The
+maintainer's [home deployment](home-deployment.md#host-startup-gate) documents one
+Linux/systemd approach and its effect on all Docker startup. For an NFS bind,
+retain `REQUIRE_NFS=true` and the marker guard; use ordinary `rw` bind options.
+
 ## Direct Docker NFS volume
 
 Use your own server/export in these non-secret `.env` settings. Leave

@@ -122,6 +122,14 @@ at creation; changing them requires a migration plan, not volume deletion.
 For SMB/CIFS or other host-mounted shares, verify identity at host level; the
 application's NFS-specific guard does not validate every network filesystem.
 
+For the maintainer's home deployment, downloads now bind the existing host path
+`/mnt/homelab-workspace/f1tv-dl` with `rw`, while `REQUIRE_NFS=true` and the marker
+remain enforced. Preserve its Docker ExecStartPre workspace gate: it runs before
+Docker restores containers and binds paths. An entrypoint wait cannot fix a
+wrong attachment. The gate waits for the exact workspace export and delays all
+Docker startup while unavailable; SSH is independent. Read DOCS/home-deployment.md
+before changing it. Retain the old `f1tv-dl-media` volume for rollback.
+
 ## After startup, before claiming success
 
 Use the non-secret mount inspection and bounded health command in
