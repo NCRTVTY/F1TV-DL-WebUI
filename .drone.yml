@@ -67,11 +67,11 @@ steps:
         from_secret: F1TV_DL_WEBUI_ENCRYPTION_KEY
     commands:
       - |
-        tar -C deploy/harlem -cf - . | docker run --rm -i --privileged --pid=host alpine:3.21 nsenter -t 1 -m -r -w /bin/sh -eu -c '
-          stage=$(mktemp -d /tmp/f1tv-host-deploy-XXXXXXXX)
-          trap '\''rm -rf "$stage"'\'' EXIT
-          tar -xf - -C "$stage"
-          /bin/sh "$stage/install.sh"
+        docker run --rm --privileged --pid=host alpine:3.21 nsenter -t 1 -m -r -w /bin/sh -eu -c '
+          # Host infrastructure is maintained on Harlem, outside this repository.
+          test -x /usr/local/sbin/f1tv-wait-for-workspace
+          systemctl show docker.service -p ExecStartPre --value | grep -F "/usr/local/sbin/f1tv-wait-for-workspace --wait" >/dev/null
+          test "$(systemctl show docker.service -p TimeoutStartUSec --value)" = infinity
           python3 /home/ronny/docker/f1tv-dl-webui/deployment/check-attachment.py
         '
       - docker compose -f ./docker-compose.yml config -q

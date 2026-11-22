@@ -10,5 +10,5 @@
 - Read [llms.txt](llms.txt) before helping with setup, storage changes, updates or offline-viewing checks. It defines persistence, capacity, mount validation and travel-device acceptance.
 - Default Compose named volumes are persistent. Get explicit confirmation only for intentionally disposable storage; do not invent a confirmation requirement for the normal persistent setup.
 - Stop on an absent expected network mount or an unusable capacity budget. Never create a local substitute at an expected NAS path, lower free-space protection, reset data or replace an existing encryption key to make checks pass.
-- Preserve the maintainer's existing Drone/home configuration and library. The root README, current Compose/configuration and current operations guides take precedence over historical design plans.
+- Preserve existing deployment configuration, storage, encryption keys and libraries. The root README, current Compose/configuration and current operations guides take precedence over historical design plans.
 - MIT covers original project contributions; preserve the third-party terms in `THIRD_PARTY_NOTICES.md`. Changing a dependency requires checking its license/source notices too.

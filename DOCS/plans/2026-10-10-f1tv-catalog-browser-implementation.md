@@ -43,4 +43,4 @@
 - Run type checks, unit/API tests, production builds, dependency audit, Compose validation, and a production container smoke test.
 - Perform responsive browser QA against representative sanitized catalog fixtures.
 - Commit, pull without rebase, repeat secret checks, and push to `main`.
-- Monitor the Drone pipeline through the Harlem health gate and confirm the deployed commit and live catalog endpoint.
+- Monitor the Drone pipeline through the deployment health gate and confirm the deployed commit and live catalog endpoint.

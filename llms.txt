@@ -15,7 +15,6 @@
 - [Operations](DOCS/operations.md): safe checks, backups, keys, updates and recovery.
 - [Deployment](DOCS/deployment.md): build your own Docker image and optional Drone/registry workflow.
 - [Scripts](scripts/README.md): what runs automatically and which operation is destructive.
-- [Home deployment](DOCS/home-deployment.md): existing maintainer infrastructure; do not apply its installation-specific host values to another user's installation.
 - [License scope](THIRD_PARTY_NOTICES.md): original code is MIT; dependencies and content keep their own terms.
 
 Historical implementation specs and dated plans are background, not current setup
@@ -122,14 +121,13 @@ at creation; changing them requires a migration plan, not volume deletion.
 For SMB/CIFS or other host-mounted shares, verify identity at host level; the
 application's NFS-specific guard does not validate every network filesystem.
 
-For the maintainer's home deployment, downloads now bind the existing host path
-`/mnt/homelab-workspace/f1tv-dl` with `rw`, while `REQUIRE_NFS=true` and the marker
-remain enforced. Preserve its Docker ExecStartPre workspace gate: it runs before
-Docker restores containers and binds paths. An entrypoint wait cannot fix a
-wrong attachment. The gate waits for the exact workspace export and delays all
-Docker startup while unavailable; SSH is independent. Read DOCS/home-deployment.md
-before changing it. The old Docker-managed NFS volume was retired after the bind
-was verified; the home deployment must not depend on or recreate that volume.
+For host-mounted network shares, preserve any host startup prerequisite that
+verifies the expected share before Docker restores containers and binds paths.
+An application entrypoint wait cannot repair a bind attached to the underlying
+local directory. Host infrastructure is managed outside this repository; the
+tracked Drone pipeline verifies its prerequisites without installing them.
+Use the current pipeline and live mount inspection for an existing deployment's
+configuration; do not recreate retired storage from historical plans.
 
 ## After startup, before claiming success
 
@@ -146,7 +144,7 @@ files or signed media URLs. Preserve an existing key/data and diagnose failures
 without resetting them. Backups contain sensitive state; protect them.
 
 For an update, require idle work, take/verify a consistent backup, preserve mount
-identity and verify the existing library afterward. The home Drone pipeline
+identity and verify the existing library afterward. The tracked Drone pipeline
 aborts when queued/running work exists; it needs a retry once idle. Never cancel
 the user's downloads simply to make a deployment pass.
 

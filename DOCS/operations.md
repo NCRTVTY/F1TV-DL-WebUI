@@ -60,7 +60,7 @@ Ordinary `down` preserves named volumes. Do not add `-v`, remove volumes, run
 `docker system prune --volumes`, or reset the library as an onboarding/update
 step. Preserve an existing server's project identity, data path, external key,
 media volume/options, NFS guard, marker, port and image settings. Verify the same
-library after starting. The maintainer's Drone pipeline requires an idle queue;
+library after starting. The tracked Drone pipeline requires an idle queue;
 it aborts a busy deployment instead of waiting automatically. Retry once idle.
 
 ## Troubleshooting

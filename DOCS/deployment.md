@@ -40,15 +40,17 @@ direct NFS uses the advanced settings in [storage](storage.md).
 
 ## Drone
 
-The tracked `.drone.yml` performs these steps for the maintainer's home. Its
-runner selector, registry, data bind, NFS export and port are installation-specific.
-Other operators must adapt those values and supply their own secret store when
-using an externally managed key. They do not need the maintainer's LAN or disks.
-The MIT grant does not grant access to the maintainer's infrastructure or account.
+The tracked `.drone.yml` contains the existing production pipeline. Its runner,
+registry, paths, storage checks and secret references are deployment-specific;
+preserve them when updating that installation. Operators adapting the pipeline
+must supply their own configuration and secret store. The standard Compose
+installation does not require this pipeline.
 
-See [home deployment](home-deployment.md) for the existing installation that must
-remain intact. The pipeline backs up SQLite, checks existing mount identities,
-and aborts deployment while downloads are queued/running. Retry it once idle.
+The pipeline verifies repository checks, builds a commit-tagged image, checks
+host storage prerequisites and existing mount identities, backs up SQLite, and
+verifies the deployed commit and writable storage. Host prerequisites must be
+provisioned separately; deployment does not install them. It aborts while
+downloads are queued/running. Retry once idle.
 
 If you distribute a prebuilt image to others, record the exact binary/source
 package versions and satisfy the source and notice obligations in

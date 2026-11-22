@@ -29,14 +29,13 @@ Jobs interrupted by a container restart return to the queue. Cancellation sends 
 
 ## Deployment
 
-Drone is the only deployment path. Pushes to `main` run verification on the Harlem Linux/AMD64 runner, build a commit-tagged image, push it to `docker-registry.nc:17788/f1tv-dl-webui`, and deploy with Docker Compose.
+The initial deployment used Drone to verify the repository, build and push a
+commit-tagged image, and apply Docker Compose. Current installations can build
+locally or use CI; see the root README and current deployment guide.
 
-The service listens on deliberately uncommon port `43729`, which is currently unused by the inspected sibling Compose projects. Persistent host paths are:
-
-- `/home/ronny/docker/f1tv-dl-webui/data`
-- `/home/ronny/docker/f1tv-dl-webui/downloads`
-
-The deployment creates those directories, starts the commit-tagged image, and waits for a health response that confirms the expected commit and writable runtime directories. OpenResty or other hostname routing remains outside this repository.
+The service listens on port `43729`, with persistent storage at `/app/data` and
+`/app/downloads`. Deployment verifies the expected commit and writable runtime
+directories. Hostname routing remains outside this repository.
 
 ## Verification
 

@@ -75,4 +75,4 @@ Provider timeouts, network failures, and response-shape changes are reported sep
 
 Sanitized provider fixtures cover current-season discovery, archived-season parsing, event extraction, session normalization, F1-only filtering, replay eligibility, malformed responses, stale-cache fallback, duplicate prevention, and internal URL derivation. API and client tests cover the complete browsing and one-click queue flow, including the INTERNATIONAL feed default and completed MP4 retrieval.
 
-Drone remains the only deployment path. Its verification stage runs type checks, unit/API tests, and production builds. A live public-catalog smoke check verifies that the deployed adapter can discover the current season without using account credentials. The existing commit and writable-storage health gate remains in place for Harlem.
+Drone remains the only deployment path. Its verification stage runs type checks, unit/API tests, and production builds. A live public-catalog smoke check verifies that the deployed adapter can discover the current season without using account credentials. The existing commit and writable-storage health gate remains in place for deployment.

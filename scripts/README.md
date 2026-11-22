@@ -3,12 +3,6 @@
 Normal Docker installation only needs the root README's Compose commands.
 Do not run maintenance scripts as part of onboarding.
 
-The installation-specific [deploy/harlem](../deploy/harlem/) scripts are separate
-host administration: Drone installs the workspace startup gate and verifies the
-existing media attachment before applying Compose. They are not required for a
-normal local Docker-volume installation. See [home deployment](../DOCS/home-deployment.md)
-for exact installed files, startup consequences and rollback.
-
 | Script / command | Purpose | When it runs |
 | --- | --- | --- |
 | `patch-f1tv-dl.mjs` | Apply exact-version authentication and media-policy patches | Automatically during `npm ci` / install, including Docker builds |

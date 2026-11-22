@@ -34,7 +34,7 @@ If these locations share a physical disk or Docker VM, add their budgets: do not
 count the same free bytes several times. The default named-volume setup shares
 Docker storage; these starting allowances total about 31 GB before other workloads.
 
-Observed 720p files in the maintainer's installation ranged from 1.86 GB to
+Previously observed 720p files ranged from 1.86 GB to
 4.10 GB. These are examples, not upper bounds. Longer sessions or higher provider
 bitrates can be larger. Plan for retained files, every queued replay, space for
 the largest planned replay again as working headroom, and an OS reserve.
@@ -80,10 +80,9 @@ guard does not validate arbitrary network filesystem types.
 Before using a host-mounted share with Docker's automatic restart policy, install
 a host startup gate that verifies the expected export **before dockerd starts**.
 An entrypoint wait or checking a directory after Docker has bound it is too late:
-mounting NFS later does not repair a container's existing private bind. The
-maintainer's [home deployment](home-deployment.md#host-startup-gate) documents one
-Linux/systemd approach and its effect on all Docker startup. For an NFS bind,
-retain `REQUIRE_NFS=true` and the marker guard; use ordinary `rw` bind options.
+mounting NFS later does not repair a container's existing private bind. Configure
+this prerequisite on the Docker host and verify its boot-time behavior. For an
+NFS bind, retain `REQUIRE_NFS=true` and the marker guard; use ordinary `rw` bind options.
 
 ## Direct Docker NFS volume
 

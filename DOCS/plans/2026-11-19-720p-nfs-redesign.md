@@ -7,7 +7,7 @@ Approved by Ronny on 2026-11-19. Implement and push to main for the existing Dro
 - One native 1280×720 MP4 per replay, exclusively F1 LIVE with one English audio track. No International fallback and no alternate resolution.
 - Remove the transcoding worker, job table, routes, settings, controls, and tests of the removed feature. FFmpeg remains the download engine's stream-copy muxer; FFprobe validates completed files.
 - Preserve the approved six-screen layout: Browse, Race weekend, Queue, Downloads, Watch, Settings. Dark graphite surfaces, Barlow/Barlow Condensed, red primary actions, real catalog imagery, compact desktop top navigation and mobile bottom navigation.
-- Keep SQLite and encrypted account state on Harlem. Media belongs on Synology Homelab-workspace/f1tv-dl through a Docker-managed NFS volume. No local media fallback.
+- Keep SQLite and encrypted account state on local persistent storage. In guarded NFS mode, media belongs on the configured export with no local media fallback. Current attachment options are documented in the storage guide.
 - Start fresh: clear job history, catalog cache, and other settings while preserving the existing encrypted login and deployment encryption key. Ronny has removed the old local media. No migration or automatic orphan deletion.
 
 Approved references: [wireframes](../design/approved-wireframes.html) and [visual language](../design/approved-visual-language.html).

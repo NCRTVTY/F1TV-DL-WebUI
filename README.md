@@ -139,7 +139,7 @@ root `SECRETS/`; production keys can remain in the CI secret store.
 
 The same Dockerfile builds local and CI images. Drone is optional; see
 [Docker and CI deployment](DOCS/deployment.md) for separate build/run commands
-and adapting the tracked home pipeline to your own CI and registry.
+and adapting the tracked pipeline to your own CI and registry.
 Build your own image from the included Dockerfile with
 `docker compose up -d --build`; no project-provided prebuilt image is needed.
 
@@ -165,18 +165,13 @@ Use Node.js 22 and FFmpeg/FFprobe. Install with `npm ci` and run `npm run dev` p
 
 Never commit account details or deployment secrets. Repository-local secret files, only when explicitly requested, belong under the ignored root `SECRETS/` directory.
 
-## Existing home deployment and maintenance
-
-The tracked `.drone.yml` explicitly supplies the maintainer's existing home
-settings to the same portable Compose file. Its registry, runner, paths and NAS
-address are installation-specific; new users do not need that infrastructure.
-See [home deployment](DOCS/home-deployment.md).
+## Maintenance
 
 Before updating an existing server, preserve its data directory, encryption key,
 media volume/options and project identity. Follow [backups, safe updates and
-troubleshooting](DOCS/operations.md). Drone backs up SQLite and requires an idle
-queue before replacing the container; a busy queue aborts the deployment and
-needs a retry once idle. It does not wait automatically.
+troubleshooting](DOCS/operations.md). The tracked Drone pipeline backs up SQLite
+and requires an idle queue before replacing the container; a busy queue aborts
+the deployment and needs a retry once idle. It does not wait automatically.
 
 The destructive [library reset](DOCS/maintenance.md) is separate maintenance,
 never an installation, ordinary update or default repair step.

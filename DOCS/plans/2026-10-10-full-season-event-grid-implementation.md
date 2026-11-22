@@ -24,4 +24,4 @@
 
 - Extend parser, merge, API, and client-state tests.
 - Run type checks, tests, builds, dependency audit, Compose validation, production-container smoke tests, and responsive browser QA.
-- Commit, pull without rebase, perform secret checks, push to `main`, monitor Drone, and verify the deployed Harlem health and catalog endpoints.
+- Commit, pull without rebase, perform secret checks, push to `main`, monitor Drone, and verify the deployed application health and catalog endpoints.
