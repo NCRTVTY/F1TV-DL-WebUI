@@ -61,10 +61,6 @@ steps:
       REQUIRE_NFS: "true"
       STORAGE_LABEL: Synology / Homelab-workspace / f1tv-dl
       STORAGE_ID: f1tv-dl-media-v1
-      MEDIA_VOLUME_NAME: f1tv-dl-media
-      MEDIA_TYPE: nfs
-      MEDIA_DEVICE: ":/volume2/Homelab-workspace/f1tv-dl"
-      MEDIA_OPTIONS: addr=192.168.0.15,nfsvers=4.1,rw,hard,timeo=50,retrans=2,rsize=1048576,wsize=1048576
       DOWNLOAD_PATH: /mnt/homelab-workspace/f1tv-dl
       DOWNLOAD_MOUNT_OPTIONS: rw
       APP_ENCRYPTION_KEY:

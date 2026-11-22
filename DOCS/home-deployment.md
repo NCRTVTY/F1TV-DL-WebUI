@@ -53,33 +53,15 @@ attachments, waits while absent and verifies recovery after restoring the
 expected NFS mount inside that namespace. It does not reboot Harlem, restart
 Docker, unmount the live host share or simulate physical NAS/network loss.
 
-The original `f1tv-dl-media` volume and its exact NFS options remain declared for
-rollback; the service no longer uses it. Do not delete or prune it.
+The old `f1tv-dl-media` Docker volume was retired after verifying the host bind.
+It is not a backup or another copy of the downloads. The home pipeline no longer
+supplies its NFS driver settings or requires that volume to exist; its attachment
+guard accepts only the host bind above. Keep the generic Compose named-volume
+support for other installations separate from this home configuration.
 
-## Roll back the attachment
-
-1. Wait for an idle queue and preserve data/key/media. Keep the workspace startup
-   gate installed; it is also useful to other host-bound workspace services.
-2. In `.drone.yml` set `DOWNLOAD_PATH: media` (the Compose volume key) and
-   `DOWNLOAD_MOUNT_OPTIONS: rw,nocopy`. Retain the existing `MEDIA_VOLUME_NAME`,
-   `MEDIA_TYPE`, `MEDIA_DEVICE` and `MEDIA_OPTIONS`, which identify the original
-   `f1tv-dl-media` volume. Keep the current attachment guard; the pre-change guard
-   rejected bind mounts and is not suitable for this reverse transition.
-3. Commit/push through Drone. Its idle check and SQLite backup still run. Verify
-   `/app/downloads` is again volume `f1tv-dl-media`, NFS/marker readiness and all
-   four existing replays through their normal HTTP download links.
-
-No data copy, volume removal, key change or whole-stack `down` is involved.
-If deliberately undoing only the gate installation after reverting the media
-attachment, restore the first `deployment/before-gate-*` backup: files marked
-`.absent` were absent originally, otherwise restore the saved file to the matching
-installed path above. Then run `systemctl daemon-reload`, without restarting
-Docker. Removing the gate reintroduces the boot race for other NAS-bound apps.
-For the initial installation, both gate files were absent: removing only
-`/etc/systemd/system/docker.service.d/30-f1tv-workspace.conf` and
-`/usr/local/sbin/f1tv-wait-for-workspace`, then running
-`systemctl daemon-reload`, restores that original startup configuration. Do this
-only as an intentional rollback after reverting the media attachment.
+The existing `f1tv-dl-media-v1` storage marker identifies the NAS directory. It is
+independent of Docker's volume definitions and stays unchanged. Keep the Docker
+startup gate installed while this or other applications bind the workspace.
 
 Keep the local database off NFS. Back up the local data directory and the deployment encryption key securely. `APP_ENCRYPTION_KEY` must remain stable; Drone supplies it from `F1TV_DL_WEBUI_ENCRYPTION_KEY`. Changing it makes saved credentials unreadable, and startup now verifies that the saved account can be decrypted before reporting healthy. API responses never return stored account values. The service is designed for the existing trusted LAN/VPN; public hostname and TLS routing are managed outside this repository.
 

@@ -128,7 +128,8 @@ remain enforced. Preserve its Docker ExecStartPre workspace gate: it runs before
 Docker restores containers and binds paths. An entrypoint wait cannot fix a
 wrong attachment. The gate waits for the exact workspace export and delays all
 Docker startup while unavailable; SSH is independent. Read DOCS/home-deployment.md
-before changing it. Retain the old `f1tv-dl-media` volume for rollback.
+before changing it. The old Docker-managed NFS volume was retired after the bind
+was verified; the home deployment must not depend on or recreate that volume.
 
 ## After startup, before claiming success
 

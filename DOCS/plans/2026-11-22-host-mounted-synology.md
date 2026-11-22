@@ -3,7 +3,9 @@
 The requested design attaches the existing NAS directory through
 `/mnt/homelab-workspace/f1tv-dl:/app/downloads` and preserves the local data bind,
 key, library, ports, permissions, image pipeline and restart policy. No data is
-moved. The existing Docker NFS volume and its options remain for rollback.
+moved. The transition retained the existing Docker NFS volume for verification;
+the user subsequently requested its removal. The current home deployment uses
+only the host bind and no longer requires the old volume or its driver options.
 
 An application entrypoint wait is too late to prevent a wrong bind. A separate
 container supervisor would also need to replace Docker's restart policy and
@@ -19,8 +21,8 @@ Version the gate, installer and attachment checks under `deploy/harlem/`; Drone
 installs them on the actual host and reloads systemd before applying Compose.
 The privileged installer uses the existing Docker administrative access, changes
 only the documented gate files, backs up previous gate configuration and never
-restarts Docker. CI accepts only the known legacy volume or desired host bind;
-the first transition compares NAS directory and replay inodes/sizes.
+restarts Docker. CI now accepts only the desired host bind; the first transition
+compared NAS directory and replay inodes/sizes before the old volume was retired.
 
 Verify missing/wrong/local/readonly storage rejection and automatic recovery;
 exercise the real gate in an isolated mount namespace without unmounting the
